@@ -1,0 +1,42 @@
+# Never commit secrets, environments, the upscaler binary, or generated output.
+.venv/
+**/.venv/
+**/__pycache__/
+*.pyc
+*.env
+.env
+.DS_Store
+
+# Local API keys / env scaffolds (keys live outside the repo)
+**/ai-images/
+
+# Etsy session cookies & Chrome profiles (sensitive)
+tooling/upload/auth_state.json
+tooling/upload/.etsy-chrome-profile/
+tooling/upload/.etsy-login-profile/
+tooling/upload/**/upload_status.json
+tooling/upload/listing_snapshots.json
+tooling/upload/research_library.json
+
+# Durable job state (local only)
+tooling/upload/.jobs/
+
+# Playwright browsers (large)
+tooling/ad-creatives/.playwright-browsers/
+**/.playwright-browsers/
+
+# Upscaler binary + models
+tooling/upscale/
+
+# Generated runs (large print files / mockups / PDFs)
+tooling/digital-product-research/
+artwork-runs/
+
+# Editor / OS / local agent noise
+.idea/
+.vscode/
+.claude/
+*.log
+Thumbs.db
+*.tmp
+*.bak

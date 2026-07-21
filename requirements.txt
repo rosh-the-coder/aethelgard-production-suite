@@ -1,0 +1,6 @@
+# Python deps for the Artwork Orchestrator skill.
+# setup.sh installs these into tooling/ad-creatives/.venv
+google-genai>=1.0.0     # Google AI Studio / Nano Banana (Gemini image models)
+openai>=1.0.0           # OpenAI GPT Image (optional provider)
+requests>=2.31.0        # OpenRouter HTTP calls
+Pillow>=10.0.0          # crop / resize to print sizes (artwork.py)

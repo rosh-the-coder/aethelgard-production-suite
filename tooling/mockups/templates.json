@@ -1,0 +1,1297 @@
+[
+  {
+    "name": "botanical_bundle_apothecary_15frames_4x5",
+    "image": "templates/botanical_bundle_apothecary_15frames_4x5.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "botanical",
+      "neutral",
+      "vintage_botanical_chart"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "layout": "bundle_marketing",
+    "note": "Bundle hero \u2014 calibrate in Mockup Studio only if compositing; otherwise use for listing carousel."
+  },
+  {
+    "name": "botanical_bundle_apothecary_18frames_4x5",
+    "image": "templates/botanical_bundle_apothecary_18frames_4x5.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "botanical",
+      "neutral",
+      "vintage_botanical_chart"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "layout": "bundle_marketing",
+    "note": "Bundle hero \u2014 calibrate in Mockup Studio only if compositing; otherwise use for listing carousel."
+  },
+  {
+    "name": "dark_academia_bundle_gallery_18frames_4x5_a",
+    "image": "templates/dark_academia_bundle_gallery_18frames_4x5_a.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "dark_academia",
+      "neutral",
+      "botanical"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "layout": "bundle_marketing",
+    "note": "Bundle hero \u2014 calibrate in Mockup Studio only if compositing; otherwise use for listing carousel."
+  },
+  {
+    "name": "dark_academia_triple_floor_lean_4x5_a",
+    "image": "templates/dark_academia_triple_floor_lean_4x5_a.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "dark_academia",
+      "neutral",
+      "botanical"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "quads": [
+      [
+        [
+          296,
+          829
+        ],
+        [
+          1262,
+          829
+        ],
+        [
+          1262,
+          3778
+        ],
+        [
+          296,
+          3778
+        ]
+      ],
+      [
+        [
+          1373,
+          829
+        ],
+        [
+          2338,
+          829
+        ],
+        [
+          2338,
+          3778
+        ],
+        [
+          1373,
+          3778
+        ]
+      ],
+      [
+        [
+          2449,
+          829
+        ],
+        [
+          3415,
+          829
+        ],
+        [
+          3415,
+          3778
+        ],
+        [
+          2449,
+          3778
+        ]
+      ]
+    ],
+    "box": [
+      296,
+      829,
+      1262,
+      3778
+    ]
+  },
+  {
+    "name": "dark_academia_triple_floor_lean_4x5_b",
+    "image": "templates/dark_academia_triple_floor_lean_4x5_b.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "dark_academia",
+      "neutral",
+      "botanical"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "quads": [
+      [
+        [
+          296,
+          829
+        ],
+        [
+          1262,
+          829
+        ],
+        [
+          1262,
+          3778
+        ],
+        [
+          296,
+          3778
+        ]
+      ],
+      [
+        [
+          1373,
+          829
+        ],
+        [
+          2338,
+          829
+        ],
+        [
+          2338,
+          3778
+        ],
+        [
+          1373,
+          3778
+        ]
+      ],
+      [
+        [
+          2449,
+          829
+        ],
+        [
+          3415,
+          829
+        ],
+        [
+          3415,
+          3778
+        ],
+        [
+          2449,
+          3778
+        ]
+      ]
+    ],
+    "box": [
+      296,
+      829,
+      1262,
+      3778
+    ]
+  },
+  {
+    "name": "japandi_bundle_gallery_14frames_4x5_a",
+    "image": "templates/japandi_bundle_gallery_14frames_4x5_a.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "japandi",
+      "minimalist",
+      "neutral"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "layout": "bundle_marketing",
+    "note": "Bundle hero \u2014 calibrate in Mockup Studio only if compositing; otherwise use for listing carousel."
+  },
+  {
+    "name": "japandi_bundle_gallery_14frames_4x5_b",
+    "image": "templates/japandi_bundle_gallery_14frames_4x5_b.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "japandi",
+      "minimalist",
+      "neutral"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "layout": "bundle_marketing",
+    "note": "Bundle hero \u2014 calibrate in Mockup Studio only if compositing; otherwise use for listing carousel."
+  },
+  {
+    "name": "japandi_gallery_five_bench_4x5",
+    "image": "templates/japandi_gallery_five_bench_4x5.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "japandi",
+      "minimalist",
+      "neutral"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "quads": [
+      [
+        [
+          296,
+          829
+        ],
+        [
+          831,
+          829
+        ],
+        [
+          831,
+          3778
+        ],
+        [
+          296,
+          3778
+        ]
+      ],
+      [
+        [
+          942,
+          829
+        ],
+        [
+          1477,
+          829
+        ],
+        [
+          1477,
+          3778
+        ],
+        [
+          942,
+          3778
+        ]
+      ],
+      [
+        [
+          1588,
+          829
+        ],
+        [
+          2123,
+          829
+        ],
+        [
+          2123,
+          3778
+        ],
+        [
+          1588,
+          3778
+        ]
+      ],
+      [
+        [
+          2234,
+          829
+        ],
+        [
+          2769,
+          829
+        ],
+        [
+          2769,
+          3778
+        ],
+        [
+          2234,
+          3778
+        ]
+      ],
+      [
+        [
+          2880,
+          829
+        ],
+        [
+          3415,
+          829
+        ],
+        [
+          3415,
+          3778
+        ],
+        [
+          2880,
+          3778
+        ]
+      ]
+    ],
+    "box": [
+      296,
+      829,
+      831,
+      3778
+    ]
+  },
+  {
+    "name": "japandi_shelf_portrait_4x5",
+    "image": "templates/japandi_shelf_portrait_4x5.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "japandi",
+      "minimalist",
+      "neutral"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "quad": [
+      [
+        1299,
+        1290
+      ],
+      [
+        2412,
+        1198
+      ],
+      [
+        2338,
+        3317
+      ],
+      [
+        1224,
+        3409
+      ]
+    ],
+    "box": [
+      1224,
+      1198,
+      2412,
+      3409
+    ]
+  },
+  {
+    "name": "japandi_single_shelf_pampas_4x5_a",
+    "image": "templates/japandi_single_shelf_pampas_4x5_a.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "japandi",
+      "minimalist",
+      "neutral"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "quad": [
+      [
+        1299,
+        1290
+      ],
+      [
+        2412,
+        1198
+      ],
+      [
+        2338,
+        3317
+      ],
+      [
+        1224,
+        3409
+      ]
+    ],
+    "box": [
+      1224,
+      1198,
+      2412,
+      3409
+    ]
+  },
+  {
+    "name": "japandi_single_sideboard_4x5_a",
+    "image": "templates/japandi_single_sideboard_4x5_a.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "japandi",
+      "minimalist",
+      "neutral"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "quad": [
+      [
+        1299,
+        1290
+      ],
+      [
+        2412,
+        1198
+      ],
+      [
+        2338,
+        3317
+      ],
+      [
+        1224,
+        3409
+      ]
+    ],
+    "box": [
+      1224,
+      1198,
+      2412,
+      3409
+    ]
+  },
+  {
+    "name": "japandi_single_sideboard_4x5_b",
+    "image": "templates/japandi_single_sideboard_4x5_b.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "japandi",
+      "minimalist",
+      "neutral"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "quad": [
+      [
+        1299,
+        1290
+      ],
+      [
+        2412,
+        1198
+      ],
+      [
+        2338,
+        3317
+      ],
+      [
+        1224,
+        3409
+      ]
+    ],
+    "box": [
+      1224,
+      1198,
+      2412,
+      3409
+    ]
+  },
+  {
+    "name": "japandi_trio_console_monstera_4x5_a",
+    "image": "templates/japandi_trio_console_monstera_4x5_a.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "japandi",
+      "minimalist",
+      "neutral"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "quads": [
+      [
+        [
+          296,
+          829
+        ],
+        [
+          1262,
+          829
+        ],
+        [
+          1262,
+          3778
+        ],
+        [
+          296,
+          3778
+        ]
+      ],
+      [
+        [
+          1373,
+          829
+        ],
+        [
+          2338,
+          829
+        ],
+        [
+          2338,
+          3778
+        ],
+        [
+          1373,
+          3778
+        ]
+      ],
+      [
+        [
+          2449,
+          829
+        ],
+        [
+          3415,
+          829
+        ],
+        [
+          3415,
+          3778
+        ],
+        [
+          2449,
+          3778
+        ]
+      ]
+    ],
+    "box": [
+      296,
+      829,
+      1262,
+      3778
+    ]
+  },
+  {
+    "name": "japandi_trio_console_monstera_4x5_b",
+    "image": "templates/japandi_trio_console_monstera_4x5_b.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "japandi",
+      "minimalist",
+      "neutral"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "quads": [
+      [
+        [
+          296,
+          829
+        ],
+        [
+          1262,
+          829
+        ],
+        [
+          1262,
+          3778
+        ],
+        [
+          296,
+          3778
+        ]
+      ],
+      [
+        [
+          1373,
+          829
+        ],
+        [
+          2338,
+          829
+        ],
+        [
+          2338,
+          3778
+        ],
+        [
+          1373,
+          3778
+        ]
+      ],
+      [
+        [
+          2449,
+          829
+        ],
+        [
+          3415,
+          829
+        ],
+        [
+          3415,
+          3778
+        ],
+        [
+          2449,
+          3778
+        ]
+      ]
+    ],
+    "box": [
+      296,
+      829,
+      1262,
+      3778
+    ]
+  },
+  {
+    "name": "japandi_triple_floor_lean_4x5_a",
+    "image": "templates/japandi_triple_floor_lean_4x5_a.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "tags": [
+      "japandi",
+      "minimalist",
+      "neutral"
+    ],
+    "needs_calibration": true,
+    "source": "higgsfield",
+    "quads": [
+      [
+        [
+          296,
+          829
+        ],
+        [
+          1262,
+          829
+        ],
+        [
+          1262,
+          3778
+        ],
+        [
+          296,
+          3778
+        ]
+      ],
+      [
+        [
+          1373,
+          829
+        ],
+        [
+          2338,
+          829
+        ],
+        [
+          2338,
+          3778
+        ],
+        [
+          1373,
+          3778
+        ]
+      ],
+      [
+        [
+          2449,
+          829
+        ],
+        [
+          3415,
+          829
+        ],
+        [
+          3415,
+          3778
+        ],
+        [
+          2449,
+          3778
+        ]
+      ]
+    ],
+    "box": [
+      296,
+      829,
+      1262,
+      3778
+    ]
+  },
+  {
+    "name": "japandi_triple_floor_lean_4x5_b",
+    "image": "templates/japandi_triple_floor_lean_4x5_b.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "box": [
+      918,
+      2198,
+      1586,
+      3435
+    ],
+    "tags": [
+      "boho",
+      "minimalist",
+      "japandi",
+      "botanical",
+      "neutral"
+    ],
+    "calibrated": true,
+    "quads": [
+      [
+        [
+          1024,
+          2220
+        ],
+        [
+          1586,
+          2198
+        ],
+        [
+          1495,
+          3435
+        ],
+        [
+          918,
+          3344
+        ]
+      ],
+      [
+        [
+          1707,
+          2198
+        ],
+        [
+          2405,
+          2175
+        ],
+        [
+          2321,
+          3556
+        ],
+        [
+          1608,
+          3450
+        ]
+      ],
+      [
+        [
+          2541,
+          2175
+        ],
+        [
+          3421,
+          2144
+        ],
+        [
+          3361,
+          3708
+        ],
+        [
+          2458,
+          3571
+        ]
+      ]
+    ]
+  },
+  {
+    "name": "japandi_single_shelf_pampas_4x5_b",
+    "image": "templates/japandi_single_shelf_pampas_4x5_b.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "box": [
+      1333,
+      1516,
+      2391,
+      3061
+    ],
+    "tags": [
+      "boho",
+      "minimalist",
+      "japandi",
+      "botanical",
+      "neutral"
+    ],
+    "calibrated": true,
+    "quad": [
+      [
+        1344,
+        1527
+      ],
+      [
+        2391,
+        1516
+      ],
+      [
+        2391,
+        3050
+      ],
+      [
+        1333,
+        3061
+      ]
+    ]
+  },
+  {
+    "name": "THEglassONE",
+    "image": "templates/THEglassONE.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "box": [
+      1270,
+      1245,
+      2488,
+      3221
+    ],
+    "tags": [
+      "boho",
+      "minimalist",
+      "japandi",
+      "neutral"
+    ],
+    "calibrated": true,
+    "quad": [
+      [
+        1371,
+        1306
+      ],
+      [
+        2488,
+        1245
+      ],
+      [
+        2402,
+        3221
+      ],
+      [
+        1270,
+        3124
+      ]
+    ]
+  },
+  {
+    "name": "dark_academia_bundle_gallery_18frames_4x5_b",
+    "image": "templates/dark_academia_bundle_gallery_18frames_4x5_b.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "box": [
+      1052,
+      724,
+      1330,
+      1190
+    ],
+    "tags": [
+      "neutral"
+    ],
+    "calibrated": true,
+    "quads": [
+      [
+        [
+          1052,
+          736
+        ],
+        [
+          1326,
+          724
+        ],
+        [
+          1330,
+          1182
+        ],
+        [
+          1056,
+          1190
+        ]
+      ],
+      [
+        [
+          1627,
+          473
+        ],
+        [
+          1883,
+          458
+        ],
+        [
+          1887,
+          873
+        ],
+        [
+          1631,
+          885
+        ]
+      ],
+      [
+        [
+          2153,
+          549
+        ],
+        [
+          2325,
+          541
+        ],
+        [
+          2329,
+          816
+        ],
+        [
+          2153,
+          827
+        ]
+      ],
+      [
+        [
+          621,
+          961
+        ],
+        [
+          804,
+          953
+        ],
+        [
+          808,
+          1235
+        ],
+        [
+          625,
+          1243
+        ]
+      ],
+      [
+        [
+          2150,
+          1049
+        ],
+        [
+          2317,
+          1041
+        ],
+        [
+          2325,
+          1312
+        ],
+        [
+          2153,
+          1319
+        ]
+      ],
+      [
+        [
+          2577,
+          789
+        ],
+        [
+          2881,
+          778
+        ],
+        [
+          2885,
+          1281
+        ],
+        [
+          2577,
+          1285
+        ]
+      ],
+      [
+        [
+          1624,
+          1220
+        ],
+        [
+          1910,
+          1209
+        ],
+        [
+          1913,
+          1678
+        ],
+        [
+          1627,
+          1682
+        ]
+      ],
+      [
+        [
+          583,
+          1472
+        ],
+        [
+          797,
+          1464
+        ],
+        [
+          800,
+          1830
+        ],
+        [
+          587,
+          1838
+        ]
+      ],
+      [
+        [
+          1037,
+          1479
+        ],
+        [
+          1323,
+          1472
+        ],
+        [
+          1323,
+          1769
+        ],
+        [
+          1041,
+          1773
+        ]
+      ],
+      [
+        [
+          2188,
+          1571
+        ],
+        [
+          2546,
+          1563
+        ],
+        [
+          2550,
+          1929
+        ],
+        [
+          2192,
+          1937
+        ]
+      ],
+      [
+        [
+          2826,
+          1552
+        ],
+        [
+          3062,
+          1548
+        ],
+        [
+          3066,
+          1933
+        ],
+        [
+          2826,
+          1933
+        ]
+      ],
+      [
+        [
+          677,
+          2074
+        ],
+        [
+          898,
+          2074
+        ],
+        [
+          898,
+          2440
+        ],
+        [
+          684,
+          2436
+        ]
+      ],
+      [
+        [
+          1119,
+          2044
+        ],
+        [
+          1340,
+          2040
+        ],
+        [
+          1340,
+          2410
+        ],
+        [
+          1122,
+          2410
+        ]
+      ],
+      [
+        [
+          1645,
+          2032
+        ],
+        [
+          1892,
+          2032
+        ],
+        [
+          1892,
+          2292
+        ],
+        [
+          1645,
+          2295
+        ]
+      ],
+      [
+        [
+          2178,
+          2273
+        ],
+        [
+          2464,
+          2269
+        ],
+        [
+          2464,
+          2726
+        ],
+        [
+          2178,
+          2726
+        ]
+      ],
+      [
+        [
+          2742,
+          2192
+        ],
+        [
+          2914,
+          2189
+        ],
+        [
+          2914,
+          2456
+        ],
+        [
+          2742,
+          2459
+        ]
+      ],
+      [
+        [
+          1103,
+          2658
+        ],
+        [
+          1344,
+          2658
+        ],
+        [
+          1347,
+          2822
+        ],
+        [
+          1107,
+          2818
+        ]
+      ],
+      [
+        [
+          1622,
+          2574
+        ],
+        [
+          1900,
+          2578
+        ],
+        [
+          1904,
+          3035
+        ],
+        [
+          1626,
+          3027
+        ]
+      ]
+    ],
+    "layout": "gallery_custom",
+    "frame_count": 18
+  },
+  {
+    "name": "dark_academia_ornate_portrait_4x5",
+    "image": "templates/dark_academia_ornate_portrait_4x5.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "box": [
+      1347,
+      1646,
+      2456,
+      3145
+    ],
+    "tags": [
+      "dark_academia",
+      "botanical"
+    ],
+    "calibrated": true,
+    "quad": [
+      [
+        1359,
+        1646
+      ],
+      [
+        2445,
+        1646
+      ],
+      [
+        2456,
+        3145
+      ],
+      [
+        1347,
+        3145
+      ]
+    ]
+  },
+  {
+    "name": "boho_bedroom_portrait_4x5",
+    "image": "templates/boho_bedroom_portrait_4x5.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "box": [
+      1404,
+      1456,
+      2647,
+      3249
+    ],
+    "tags": [
+      "neutral"
+    ],
+    "calibrated": true,
+    "quads": [
+      [
+        [
+          1496,
+          1456
+        ],
+        [
+          2647,
+          1517
+        ],
+        [
+          2556,
+          3249
+        ],
+        [
+          1404,
+          3188
+        ]
+      ],
+      [
+        [
+          2966,
+          3177
+        ],
+        [
+          3709,
+          3177
+        ],
+        [
+          3709,
+          4606
+        ],
+        [
+          2966,
+          4606
+        ]
+      ]
+    ],
+    "layout": "multi_frame",
+    "frame_count": 2
+  }
+]

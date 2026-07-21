@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Aethelgard Listing Capture</title>
+  <style>
+    body { font-family: Georgia, serif; background: #111; color: #eee; max-width: 680px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    a.bookmark { display: inline-block; background: #c5a880; color: #111; padding: 12px 18px; text-decoration: none; font-weight: 700; border-radius: 6px; margin: 16px 0; }
+    code { background: #222; padding: 2px 6px; border-radius: 4px; }
+    .muted { color: #999; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Listing Capture Bookmarklet</h1>
+  <p>Phase 1 of EverBee-style listing analysis: grab public listing signals from the page you’re viewing, then estimate the paid-style metrics in the Production Suite.</p>
+  <p><strong>Drag this to your bookmarks bar:</strong></p>
+  <p><a class="bookmark" id="bm" href="#">Capture Etsy Listing → Suite</a></p>
+  <ol>
+    <li>Dashboard running at <code>http://127.0.0.1:8080</code></li>
+    <li>Open any listing (<code>/listing/...</code> or <code>/ie/listing/...</code>)</li>
+    <li>Click the bookmarklet</li>
+    <li>Open <strong>Market Research → Listing Analyzer</strong></li>
+  </ol>
+  <p class="muted">Views, favorites, age, tags = public. Monthly/total sales, conversion, visibility = estimates (same class as EverBee paid — not private Etsy data).</p>
+  <script>
+    const js = `javascript:(function(){
+      function parseCount(s){
+        if(s===0||s==='0') return 0;
+        if(s==null||s==='') return null;
+        s=String(s).trim().toLowerCase().replace(/,/g,'').replace(/\\s+/g,'');
+        var m=s.match(/^([\\d.]+)(k)?$/);
+        if(!m) return null;
+        var n=parseFloat(m[1]);
+        if(m[2]==='k') n*=1000;
+        return Math.round(n);
+      }
+      try {
+        var href = location.href || '';
+        var path = location.pathname || '';
+        if (!/etsy\\.com/i.test(href) || !/\\/listing\\/\\d+/i.test(path)) {
+          alert('Open an Etsy listing page first (etsy.com/.../listing/123...).');
+          return;
+        }
+        var lid = (path.match(/\\/listing\\/(\\d+)/i) || [])[1] || '';
+        var body = (document.body && document.body.innerText) || '';
+        var title = '';
+        var h1 = document.querySelector('h1');
+        if (h1) title = (h1.innerText || '').trim();
+        if (!title) title = (document.title || '').split(' - Etsy')[0].trim();
+
+        var price = '';
+        var priceEl = document.querySelector('[data-buy-box-region] .currency-value, .wt-text-title-larger .currency-value, p.wt-text-title-larger');
+        if (priceEl) price = (priceEl.innerText || '').trim();
+        if (!price) {
+          var pm = body.match(/(?:€|\\$|£)\\s*[\\d,.]+/);
+          if (pm) price = pm[0];
+        }
+
+        var shopName = '';
+        var shopUrl = '';
+        var shopA = document.querySelector('a[href*="/shop/"]');
+        if (shopA) {
+          shopUrl = (shopA.href || '').split('?')[0];
+          shopName = ((shopA.innerText || '').trim()) || ((shopUrl.match(/\\/shop\\/([^\\/?#]+)/)||[])[1]||'');
+        }
+
+        var img = '';
+        var imgEl = document.querySelector('[data-carousel-pane-image] img, .listing-page-image img, img[data-src-delay]');
+        if (imgEl) img = imgEl.src || imgEl.getAttribute('data-src') || '';
+
+        var views = null, favorites = null, listingReviews = null;
+        var vm = body.match(/([\\d,.]+[kK]?)\\s+views?\\b/i);
+        if (vm) views = parseCount(vm[1]);
+        var fm = body.match(/([\\d,.]+[kK]?)\\s+favorites?\\b/i);
+        if (fm) favorites = parseCount(fm[1]);
+        var rm = body.match(/\\(([\\d,.]+[kK]?)\\s+reviews?\\)/i) || body.match(/([\\d,.]+[kK]?)\\s+reviews?\\b/i);
+        if (rm) listingReviews = parseCount(rm[1]);
+
+        var ageMonths = null, ageLabel = '';
+        var listed = body.match(/Listed on\\s+([A-Za-z]+\\s+\\d{1,2},\\s+\\d{4})/i);
+        if (listed) {
+          ageLabel = listed[1];
+          try {
+            var d = new Date(listed[1]);
+            if (!isNaN(d.getTime())) {
+              var now = new Date();
+              ageMonths = Math.max(1, (now.getFullYear()-d.getFullYear())*12 + (now.getMonth()-d.getMonth()));
+            }
+          } catch(e){}
+        }
+
+        var tags = [];
+        var tagLinks = document.querySelectorAll('a[href*="/search?q="], a[href*="/search/?q="], a[href*="search?ref=shop_tag"]');
+        tagLinks.forEach(function(a){
+          var t = (a.innerText || '').trim();
+          if (t && t.length < 60 && tags.indexOf(t) < 0) tags.push(t);
+        });
+        if (!tags.length) {
+          var tg = body.match(/Tags?[\\s\\S]{0,40}?\\n((?:[^\\n]+\\n){1,16})/i);
+          if (tg) {
+            tg[1].split('\\n').forEach(function(line){
+              line = line.trim();
+              if (line && line.length < 60 && !/^(Highlights|Description|Shipping)/i.test(line)) tags.push(line);
+            });
+          }
+        }
+
+        var details = {};
+        var whenMade = body.match(/When made\\s*[:\\-]?\\s*([^\\n]+)/i);
+        if (whenMade) details.when_made = whenMade[1].trim();
+        if (/digital download/i.test(body)) details.listing_type = 'download';
+        details.customizable = /customizable\\s*[:\\-]?\\s*yes/i.test(body) ? 'Yes' : (/customizable\\s*[:\\-]?\\s*no/i.test(body) ? 'No' : '');
+        details.personalized = /personalised|personalized/i.test(body) && /yes/i.test(body) ? 'Yes' : '';
+        var who = body.match(/Who made(?: this)?\\s*[:\\-]?\\s*([^\\n]+)/i);
+        if (who) details.who_made = who[1].trim();
+
+        var category = '';
+        var crumb = document.querySelectorAll('a[href*="/c/"]');
+        if (crumb.length) category = (crumb[crumb.length-1].innerText || '').trim();
+
+        var stats = {
+          listing_id: lid,
+          title: title,
+          price: price,
+          shop_name: shopName,
+          shop_url: shopUrl,
+          image: img,
+          views: views,
+          favorites: favorites,
+          listing_reviews: listingReviews,
+          listing_age_months: ageMonths,
+          listing_age_label: ageLabel || (ageMonths ? (ageMonths + ' mo.') : ''),
+          category: category,
+          when_made: details.when_made || '',
+          listing_type: details.listing_type || '',
+          who_made: details.who_made || '',
+          customizable: details.customizable || '',
+          tags: tags
+        };
+
+        var payload = {
+          listing_url: href.split('?')[0],
+          page_text: body.slice(0, 120000),
+          stats: stats,
+          tags: tags,
+          details: details
+        };
+
+        function okMsg(L){
+          alert('Listing captured\\n' + ((L&&L.title)||title).slice(0,60)
+            + '\\nViews: '+((L&&L.views)!=null?L.views:'—')
+            + ' | Favs: '+((L&&L.favorites)!=null?L.favorites:'—')
+            + ' | Est. mo sales: '+((L&&L.est_monthly_sales)!=null?L.est_monthly_sales:'—')
+            + '\\nOpen Market Research → Listing Analyzer');
+        }
+
+        function postForm(){
+          var f = document.createElement('form');
+          f.method = 'POST';
+          f.action = 'http://127.0.0.1:8080/api/import_listing_capture_form';
+          f.target = '_blank';
+          f.style.display = 'none';
+          var inp = document.createElement('input');
+          inp.type = 'hidden';
+          inp.name = 'payload';
+          inp.value = JSON.stringify(payload);
+          f.appendChild(inp);
+          document.body.appendChild(f);
+          f.submit();
+          setTimeout(function(){ try{f.remove();}catch(e){} }, 500);
+          alert('Opening capture window… If a new tab loads “Captured”, check Listing Analyzer.\\nIf blocked, allow pop-ups for Etsy once.');
+        }
+
+        fetch('http://127.0.0.1:8080/api/import_listing_capture', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).then(function(r){ return r.json(); }).then(function(d){
+          if (d && d.success) okMsg(d.listing);
+          else postForm();
+        }).catch(function(){ postForm(); });
+      } catch (e) {
+        alert('Capture error: ' + e.message);
+      }
+    })();`;
+    document.getElementById('bm').href = js;
+  </script>
+</body>
+</html>

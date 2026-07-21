@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EAP Mockup Coordinator Helper</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Plus+Jakarta+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0f1016;
+            --bg-surface: rgba(22, 24, 37, 0.7);
+            --bg-card: rgba(30, 32, 50, 0.5);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --primary-glow: rgba(99, 102, 241, 0.15);
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --accent: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding: 40px;
+            overflow-x: hidden;
+        }
+
+        /* Glassmorphism background effect */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -20%;
+            left: -20%;
+            width: 140%;
+            height: 140%;
+            background: 
+                radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.08) 0%, transparent 40%);
+            z-index: -1;
+            pointer-events: none;
+        }
+
+        header {
+            max-width: 1400px;
+            margin: 0 auto 30px auto;
+            width: 100%;
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 1rem;
+        }
+
+        .main-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 30px;
+            flex-grow: 1;
+        }
+
+        .canvas-area {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 24px;
+            backdrop-filter: blur(16px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 500px;
+            position: relative;
+        }
+
+        .editor-container {
+            position: relative;
+            user-select: none;
+            max-width: 100%;
+            max-height: 70vh;
+        }
+
+        .editor-container img {
+            display: block;
+            max-width: 100%;
+            max-height: 70vh;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .selection-box {
+            position: absolute;
+            border: 2px dashed #f59e0b;
+            background-color: rgba(245, 158, 11, 0.15);
+            display: none;
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+            cursor: crosshair;
+        }
+
+        .selection-handle {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background-color: #fff;
+            border: 1px solid #f59e0b;
+            border-radius: 50%;
+        }
+
+        .drag-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            cursor: crosshair;
+            z-index: 10;
+        }
+
+        .sidebar {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 30px;
+            backdrop-filter: blur(16px);
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .card-title {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            font-weight: 700;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .btn {
+            background-color: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 12px 20px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .btn:hover {
+            background-color: var(--primary-hover);
+            box-shadow: 0 0 16px var(--primary-glow);
+            transform: translateY(-1px);
+        }
+
+        .btn-outline {
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+        }
+
+        .btn-outline:hover {
+            background-color: rgba(255, 255, 255, 0.03);
+            border-color: rgba(255, 255, 255, 0.2);
+            box-shadow: none;
+            transform: none;
+        }
+
+        .coords-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .coord-val {
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 1rem;
+            text-align: center;
+        }
+
+        .coord-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 140px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: #10b981;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.85rem;
+            padding: 12px;
+            resize: none;
+            margin-top: 10px;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background-color: #10b981;
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 100;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .file-drop-text {
+            color: var(--text-muted);
+            text-align: center;
+            font-size: 1.1rem;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Mockup Coordinator Helper</h1>
+        <div class="subtitle">Drag a rectangle on your mockup frame to generate bounding box coordinates.</div>
+    </header>
+
+    <div class="main-container">
+        <div class="canvas-area" id="canvasArea">
+            <div class="file-drop-text" id="dropText">
+                <p style="margin-bottom: 12px;">No image loaded.</p>
+                <label for="imageLoader" class="btn" style="max-width: 250px; margin: 0 auto;">Select Mockup Image</label>
+                <input type="file" id="imageLoader" accept="image/*">
+            </div>
+            
+            <div class="editor-container" id="editorContainer" style="display: none;">
+                <img id="mockupImage" src="" alt="Mockup">
+                <div class="selection-box" id="selectionBox"></div>
+                <div class="drag-overlay" id="dragOverlay"></div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="card">
+                <div class="card-title">Load Mockup</div>
+                <label for="imageLoader2" class="btn btn-outline">Change Image</label>
+                <input type="file" id="imageLoader2" accept="image/*">
+            </div>
+
+            <div class="card">
+                <div class="card-title">Bounding Box Coordinates</div>
+                <div class="coords-grid">
+                    <div>
+                        <div class="coord-label">Left (X1)</div>
+                        <div class="coord-val" id="valLeft">0</div>
+                    </div>
+                    <div>
+                        <div class="coord-label">Top (Y1)</div>
+                        <div class="coord-val" id="valTop">0</div>
+                    </div>
+                    <div>
+                        <div class="coord-label">Right (X2)</div>
+                        <div class="coord-val" id="valRight">0</div>
+                    </div>
+                    <div>
+                        <div class="coord-label">Bottom (Y2)</div>
+                        <div class="coord-val" id="valBottom">0</div>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 15px; display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-muted);">
+                    <span>Width: <strong id="valWidth" style="color: #fff;">0</strong>px</span>
+                    <span>Height: <strong id="valHeight" style="color: #fff;">0</strong>px</span>
+                    <span>Aspect: <strong id="valAspect" style="color: var(--accent);">0.00</strong></span>
+                </div>
+            </div>
+
+            <div class="card" style="flex-grow: 1; display: flex; flex-direction: column;">
+                <div class="card-title">JSON Configuration</div>
+                <p style="font-size: 0.8rem; color: var(--text-muted);">Copy and paste this object into your <code>templates.json</code>:</p>
+                <textarea id="jsonOutput" readonly></textarea>
+                <button class="btn" style="margin-top: 15px;" id="copyBtn">Copy JSON</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast">JSON copied to clipboard!</div>
+
+    <script>
+        const imageLoader = document.getElementById('imageLoader');
+        const imageLoader2 = document.getElementById('imageLoader2');
+        const mockupImage = document.getElementById('mockupImage');
+        const editorContainer = document.getElementById('editorContainer');
+        const dropText = document.getElementById('dropText');
+        const selectionBox = document.getElementById('selectionBox');
+        const dragOverlay = document.getElementById('dragOverlay');
+        const copyBtn = document.getElementById('copyBtn');
+        const jsonOutput = document.getElementById('jsonOutput');
+        const toast = document.getElementById('toast');
+
+        // Coordinate elements
+        const valLeft = document.getElementById('valLeft');
+        const valTop = document.getElementById('valTop');
+        const valRight = document.getElementById('valRight');
+        const valBottom = document.getElementById('valBottom');
+        const valWidth = document.getElementById('valWidth');
+        const valHeight = document.getElementById('valHeight');
+        const valAspect = document.getElementById('valAspect');
+
+        let originalWidth = 0;
+        let originalHeight = 0;
+        let displayedWidth = 0;
+        let displayedHeight = 0;
+        let scaleFactorX = 1;
+        let scaleFactorY = 1;
+
+        let startX = 0, startY = 0;
+        let isDrawing = false;
+        let boxCoords = { x1: 0, y1: 0, x2: 0, y2: 0 };
+        let imageName = "custom_mockup";
+
+        function handleImage(e) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                mockupImage.src = event.target.result;
+                mockupImage.onload = function() {
+                    originalWidth = mockupImage.naturalWidth;
+                    originalHeight = mockupImage.naturalHeight;
+                    
+                    dropText.style.display = 'none';
+                    editorContainer.style.display = 'block';
+                    
+                    updateScaleFactors();
+                    resetBox();
+                };
+            }
+            if (e.target.files[0]) {
+                imageName = e.target.files[0].name.split('.')[0].toLowerCase().replace(/[^a-z0-9]/g, '_');
+                reader.readAsDataURL(e.target.files[0]);
+            }
+        }
+
+        imageLoader.addEventListener('change', handleImage);
+        imageLoader2.addEventListener('change', handleImage);
+
+        window.addEventListener('resize', () => {
+            if (editorContainer.style.display !== 'none') {
+                updateScaleFactors();
+                redrawBox();
+            }
+        });
+
+        function updateScaleFactors() {
+            displayedWidth = mockupImage.clientWidth;
+            displayedHeight = mockupImage.clientHeight;
+            scaleFactorX = originalWidth / displayedWidth;
+            scaleFactorY = originalHeight / displayedHeight;
+        }
+
+        function resetBox() {
+            selectionBox.style.display = 'none';
+            boxCoords = { x1: 0, y1: 0, x2: 0, y2: 0 };
+            updateCoordsUI();
+        }
+
+        dragOverlay.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            const rect = dragOverlay.getBoundingClientRect();
+            startX = e.clientX - rect.left;
+            startY = e.clientY - rect.top;
+            
+            selectionBox.style.left = startX + 'px';
+            selectionBox.style.top = startY + 'px';
+            selectionBox.style.width = '0px';
+            selectionBox.style.height = '0px';
+            selectionBox.style.display = 'block';
+        });
+
+        dragOverlay.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            const rect = dragOverlay.getBoundingClientRect();
+            const currentX = e.clientX - rect.left;
+            const currentY = e.clientY - rect.top;
+
+            const left = Math.min(startX, currentX);
+            const top = Math.min(startY, currentY);
+            const width = Math.abs(startX - currentX);
+            const height = Math.abs(startY - currentY);
+
+            selectionBox.style.left = left + 'px';
+            selectionBox.style.top = top + 'px';
+            selectionBox.style.width = width + 'px';
+            selectionBox.style.height = height + 'px';
+
+            // Store screen coordinates
+            boxCoords.x1 = left;
+            boxCoords.y1 = top;
+            boxCoords.x2 = left + width;
+            boxCoords.y2 = top + height;
+            
+            updateCoordsUI();
+        });
+
+        dragOverlay.addEventListener('mouseup', () => {
+            isDrawing = false;
+        });
+
+        function redrawBox() {
+            if (boxCoords.x1 === 0 && boxCoords.x2 === 0) return;
+            // Recalculate screen coords from scaled coords
+            const sX1 = boxCoords.x1 / scaleFactorX;
+            const sY1 = boxCoords.y1 / scaleFactorY;
+            const sX2 = boxCoords.x2 / scaleFactorX;
+            const sY2 = boxCoords.y2 / scaleFactorY;
+            
+            selectionBox.style.left = sX1 + 'px';
+            selectionBox.style.top = sY1 + 'px';
+            selectionBox.style.width = (sX2 - sX1) + 'px';
+            selectionBox.style.height = (sY2 - sY1) + 'px';
+        }
+
+        function updateCoordsUI() {
+            // Convert to original image coordinates
+            const origX1 = Math.round(boxCoords.x1 * scaleFactorX);
+            const origY1 = Math.round(boxCoords.y1 * scaleFactorY);
+            const origX2 = Math.round(boxCoords.x2 * scaleFactorX);
+            const origY2 = Math.round(boxCoords.y2 * scaleFactorY);
+
+            const w = origX2 - origX1;
+            const h = origY2 - origY1;
+            const aspect = h > 0 ? (w / h).toFixed(2) : "0.00";
+            
+            valLeft.innerText = origX1;
+            valTop.innerText = origY1;
+            valRight.innerText = origX2;
+            valBottom.innerText = origY2;
+            valWidth.innerText = w;
+            valHeight.innerText = h;
+            valAspect.innerText = aspect;
+
+            // Generate JSON output
+            const aspectStr = aspect > 1.05 ? "3:2" : (aspect < 0.95 ? "4:5" : "1:1");
+            const orientation = aspect > 1.05 ? "landscape" : "portrait";
+            
+            const jsonObj = {
+                "name": imageName,
+                "image": `templates/${imageName}.png`,
+                "orientation": orientation,
+                "aspect": aspectStr,
+                "box": [origX1, origY1, origX2, origY2]
+            };
+
+            jsonOutput.value = JSON.stringify(jsonObj, null, 2);
+        }
+
+        copyBtn.addEventListener('click', () => {
+            jsonOutput.select();
+            document.execCommand('copy');
+            
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Aethelgard Shop Capture</title>
+  <style>
+    body { font-family: Georgia, serif; background: #111; color: #eee; max-width: 640px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    a.bookmark { display: inline-block; background: #c5a880; color: #111; padding: 12px 18px; text-decoration: none; font-weight: 700; border-radius: 6px; margin: 16px 0; }
+    code { background: #222; padding: 2px 6px; border-radius: 4px; }
+    ol { padding-left: 1.2em; }
+    .muted { color: #999; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Shop Capture Bookmarklet</h1>
+  <p>Same idea as EverBee: read the shop page <em>inside your real Chrome</em>, then send the public stats into the Production Suite.</p>
+  <p><strong>Drag this button to your bookmarks bar:</strong></p>
+  <p>
+    <a class="bookmark" id="bm" href="#">Capture Etsy Shop → Suite</a>
+  </p>
+  <ol>
+    <li>Keep the dashboard running at <code>http://127.0.0.1:8080</code></li>
+    <li>Open the shop <strong>Items</strong> tab (regional URLs like <code>/ie/shop/...</code> are fine)</li>
+    <li>Click the bookmarklet</li>
+    <li>Return to Market Research — capture auto-loads</li>
+  </ol>
+  <p class="muted"><strong>Replace any older bookmarklet</strong> by deleting it and dragging this one again.</p>
+  <script>
+    const js = `javascript:(function(){
+      function parseCount(s){
+        if(s===0||s==='0') return 0;
+        if(!s&&s!==0) return null;
+        s=String(s).trim().toLowerCase().replace(/,/g,'').replace(/\\s+/g,'');
+        var m=s.match(/^([\\d.]+)(k)?$/);
+        if(!m) return null;
+        var n=parseFloat(m[1]);
+        if(m[2]==='k') n*=1000;
+        return Math.round(n);
+      }
+      function listingId(url){
+        var m=(url||'').match(/\\/listing\\/(\\d+)/);
+        return m?m[1]:'';
+      }
+      try {
+        var href = location.href || '';
+        var path = location.pathname || '';
+        if (!/etsy\\.com/i.test(href) || !/\\/shop\\//i.test(path)) {
+          alert('Open an Etsy shop page first (e.g. etsy.com/shop/... or etsy.com/ie/shop/...).');
+          return;
+        }
+        var shop = (path.match(/\\/shop\\/([^\\/?#]+)/i) || [])[1] || '';
+        var body = ((document.body && document.body.innerText) || '');
+        var stats = {};
+        var salesM = body.match(/([\\d,.]+[kK]?)\\s+sales\\b/i);
+        if (salesM) stats.sales = parseCount(salesM[1]);
+        var revM = body.match(/([1-5](?:[.,]\\d)?)\\s*[\\(\\[]?\\s*([\\d,.]+[kK]?)\\s+reviews?[\\)\\]]?/i);
+        if (revM) { stats.rating = parseFloat(String(revM[1]).replace(',','.')); stats.reviews = parseCount(revM[2]); }
+        if (stats.reviews == null) {
+          var r2 = body.match(/\\(([\\d,.]+[kK]?)\\s+reviews?\\)/i)
+            || body.match(/([\\d,.]+[kK]?)\\s+shop reviews?\\b/i)
+            || body.match(/from\\s+([\\d,.]+[kK]?)\\s+reviews?\\b/i)
+            || body.match(/([\\d,.]+[kK]?)\\s+reviews?\\b/i);
+          if (r2) stats.reviews = parseCount(r2[1]);
+        }
+        var itemsM = body.match(/Search all\\s+([\\d,]+)\\s+items/i) || body.match(/All\\s*\\(([\\d,]+)\\)/i);
+        if (itemsM) stats.active_listings = parseCount(itemsM[1]);
+        if (stats.active_listings == null) {
+          var inputs = document.querySelectorAll('input[placeholder]');
+          for (var i=0;i<inputs.length;i++){
+            var ph = inputs[i].placeholder||'';
+            var im = ph.match(/Search all\\s+([\\d,]+)/i);
+            if (im) { stats.active_listings = parseCount(im[1]); break; }
+          }
+        }
+        var monthsM = body.match(/(\\d+)\\s+months?\\s+on\\s+Etsy/i);
+        if (monthsM) { stats.shop_age_months = parseInt(monthsM[1],10); stats.opened_on = monthsM[1]+' months on Etsy'; }
+        var locM = body.match(/\\b(United States|United Kingdom|Ireland|Canada|Australia|India)\\b/i);
+        if (locM) stats.location = locM[1];
+
+        var listings = [];
+        var seen = {};
+        var cards = document.querySelectorAll('[data-listing-card-v2], .v2-listing-card, [data-listing-id]');
+        cards.forEach(function(card) {
+          var titleEl = card.querySelector('h3, h2, .v2-listing-card__title');
+          var priceEl = card.querySelector('.currency-value, .n-listing-card__price');
+          var imgEl = card.querySelector('img');
+          var linkEl = card.querySelector('a[href*="/listing/"]');
+          var title = ((titleEl && titleEl.innerText) || '').trim();
+          if (!title) return;
+          var url = linkEl ? linkEl.href : '';
+          if (url) url = url.split('?')[0];
+          var id = listingId(url) || title.toLowerCase();
+          if (seen[id]) return;
+          seen[id] = true;
+          listings.push({
+            title: title,
+            price: ((priceEl && priceEl.innerText) || '').trim(),
+            image: imgEl ? (imgEl.src || imgEl.getAttribute('data-src') || '') : '',
+            url: url
+          });
+        });
+        if (stats.active_listings == null && listings.length) stats.active_listings = listings.length;
+
+        var payload = {
+          shop_name: shop,
+          shop_url: href.split('?')[0],
+          page_text: body.slice(0, 120000),
+          listings: listings,
+          stats: stats
+        };
+        fetch('http://127.0.0.1:8080/api/import_shop_capture', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).then(function(r) { return r.json(); }).then(function(d) {
+          if (d && d.success) {
+            var s = d.shop || {};
+            alert('Captured '+ (s.shop_name || shop)
+              + '\\nSales: '+(s.sales!=null?s.sales:'—')
+              + ' | Reviews: '+(s.reviews!=null?s.reviews:'—')
+              + ' | Listings: '+(s.active_listings!=null?s.active_listings:'—')
+              + ' | Unique cards: '+((s.listings&&s.listings.length)||0)
+              + '\\nOpen Market Research to view.');
+          } else {
+            postShopForm();
+          }
+        }).catch(function() { postShopForm(); });
+
+        function postShopForm(){
+          var f = document.createElement('form');
+          f.method = 'POST';
+          f.action = 'http://127.0.0.1:8080/api/import_shop_capture_form';
+          f.target = '_blank';
+          f.style.display = 'none';
+          var inp = document.createElement('input');
+          inp.type = 'hidden';
+          inp.name = 'payload';
+          inp.value = JSON.stringify(payload);
+          f.appendChild(inp);
+          document.body.appendChild(f);
+          f.submit();
+          alert('Opening capture window… Allow pop-ups if asked. Then check Competitor Shop Analyzer.');
+        }
+      } catch (e) {
+        alert('Capture error: ' + e.message);
+      }
+    })();`;
+    document.getElementById('bm').href = js;
+  </script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+# Artwork Orchestrator (Claude Skill)
+
+Turn **one artwork concept** into organized, list-ready print products in a single run —
+inside [Claude Code](https://claude.com/claude-code). You give it an idea; it drafts a few
+prompt variations, generates locally, **upscales**, **crops to standard print sizes at 300 DPI**,
+titles each piece, files it into its own folder, and writes listing SEO copy.
+
+Prompt-first and fully local. It is the "I already know what I want to make" tool — for a single
+concept straight through to finished print files.
+
+---
+
+## What's in this folder
+
+```
+artwork-orchestrator/
+├── README.md            ← you are here
+├── setup.sh             ← one-time installer (venv + upscaler + key scaffold)
+├── requirements.txt
+├── .claude/skills/artwork-orchestrator/   ← the skill (SKILL.md + scripts + references)
+└── tooling/ad-creatives/generate.py       ← the image-generation engine the skill calls
+```
+
+There's also an **`artwork-orchestrator.skill`** file next to this folder — that's the same skill
+packaged for a one-click drop into Claude Code if you just want the skill and will wire up the
+engine yourself. Most people should use this folder + `setup.sh` instead.
+
+---
+
+## Requirements
+
+- **macOS (Apple Silicon) or Linux**, with **Python 3.10+**
+- **[Claude Code](https://claude.com/claude-code)**
+- A **Google AI Studio API key** (free tier works to start). Optional: OpenAI + OpenRouter keys.
+
+## Setup (once)
+
+```bash
+cd artwork-orchestrator
+./setup.sh
+```
+
+`setup.sh` builds the Python environment, downloads the Real-ESRGAN upscaler for your OS, and
+creates an **empty** key file at `~/.config/ai-images/env`. **No keys are included in this
+download** — you add your own:
+
+1. Get a key at **https://aistudio.google.com/apikey**
+2. Put it in `~/.config/ai-images/env`:
+   ```bash
+   export GEMINI_API_KEY="your-key-here"
+   ```
+3. Load it:  `source ~/.config/ai-images/env`
+
+(OpenAI and OpenRouter keys are optional — only needed if you want those providers.)
+
+## Run it
+
+Open this folder in Claude Code and say, for example:
+
+> **"Run the artwork orchestrator on 'misty Pacific Northwest forest at dawn, muted greens'."**
+
+Claude drafts the prompt variations, generates candidates, opens a contact sheet for you to pick
+winners, then upscales + crops + titles + writes SEO for each keeper. Everything lands under
+`tooling/digital-product-research/artwork-runs/<your-concept>/`.
+
+Prefer the command line? The mechanical steps are:
+```bash
+PY=tooling/ad-creatives/.venv/bin/python
+ART=.claude/skills/artwork-orchestrator/scripts/artwork.py
+$PY $ART preflight            # check env + upscaler
+# ... generate + choose a source image, then:
+$PY $ART finalize piece.json  # upscale -> crop -> titled folder
+$PY $ART index <run_dir>      # build the run index
+```
+See `.claude/skills/artwork-orchestrator/SKILL.md` for the full walkthrough.
+
+## Print sizes (300 DPI)
+
+- **Portrait:** 4×6, 5×7, 8×10, 11×14
+- **Landscape:** 12×9, 20×16, 24×18, 36×24, A2
+
+## Notes
+
+- **Your keys stay on your machine** in `~/.config/ai-images/env` — they are never part of this
+  package and are `.gitignore`d.
+- **Cost** is whatever your image-model usage costs (Google AI Studio has a free tier to start).
+- Generated art and print files are yours. This tool doesn't upload anything anywhere.
+
+---
+
+*Made by Alek. If this is useful, subscribe on YouTube — it genuinely helps. Thanks for watching!*
