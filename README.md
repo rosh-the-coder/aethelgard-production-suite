@@ -1,4 +1,21 @@
-# Artwork Orchestrator (Claude Skill)
+# Aethelgard Art Co. Production Suite
+
+**Shop brand:** Aethelgard Art Co. (not live yet)  
+**GitHub:** https://github.com/rosh-the-coder/aethelgard-production-suite  
+**Operator status & next steps:** [`LAUNCH_PROGRESS.md`](./LAUNCH_PROGRESS.md)  
+**Full technical handover:** [`AETHELGARD_HANDOVER.md`](./AETHELGARD_HANDOVER.md)
+
+Local Windows dashboard (`tooling/upload/server.py` → `http://127.0.0.1:8080`) that turns concepts into print files, mockups, SEO copy, a Drive-linked delivery PDF, and an Etsy **draft** listing. Generator modes: AI, Public Domain (Met), Graphic Poster.
+
+```powershell
+.\tooling\ad-creatives\.venv\Scripts\python.exe tooling\upload\server.py
+```
+
+---
+
+# Artwork Orchestrator (upstream Claude Skill)
+
+This repo also contains Alek’s Artwork Orchestrator skill/engine (generate → upscale → crop).
 
 Turn **one artwork concept** into organized, list-ready print products in a single run —
 inside [Claude Code](https://claude.com/claude-code). You give it an idea; it drafts a few

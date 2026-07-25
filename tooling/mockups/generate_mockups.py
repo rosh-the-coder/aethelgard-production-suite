@@ -243,10 +243,13 @@ def gather_run_prints(piece_dir, prints_dir, count=3):
 
 
 def list_bundle_images(piece_dir, max_count=200):
-    """All images in the run available for gallery-wall assignment."""
+    """Images available for gallery-wall / frame assignment for THIS piece only.
+
+    - PD packs: only files inside bundle/
+    - Single prints: only this piece's master.png (not sibling listings or print crops)
+    """
     images = []
     seen = set()
-    parent_dir = os.path.dirname(piece_dir)
 
     def add(path, label=""):
         if not path or not os.path.exists(path):
@@ -258,44 +261,37 @@ def list_bundle_images(piece_dir, max_count=200):
         images.append({
             "path": path,
             "name": os.path.basename(path),
-            "label": label or os.path.basename(os.path.dirname(path)),
+            "label": label or os.path.basename(path),
         })
 
-    candidates_dir = os.path.join(parent_dir, "_candidates")
-    if os.path.exists(candidates_dir):
-        for fname in sorted(os.listdir(candidates_dir)):
-            if fname.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-                add(os.path.join(candidates_dir, fname), "candidate")
+    meta = {}
+    meta_path = os.path.join(piece_dir, "meta.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            meta = {}
 
-    if os.path.exists(parent_dir):
-        for name in sorted(os.listdir(parent_dir)):
-            if name.startswith("_"):
-                continue
-            sib_path = os.path.join(parent_dir, name)
-            if not os.path.isdir(sib_path):
-                continue
-            add(os.path.join(sib_path, "master.png"), name)
-            for sub in os.listdir(sib_path):
-                sub_p = os.path.join(sib_path, sub)
-                if os.path.isdir(sub_p) and ("print" in sub.lower() or sub.lower() == "prints"):
-                    for fname in sorted(os.listdir(sub_p)):
-                        if fname.lower().endswith((".jpg", ".jpeg", ".png")):
-                            add(os.path.join(sub_p, fname), name)
-
-    add(os.path.join(piece_dir, "master.png"), os.path.basename(piece_dir))
-    prints_dir = None
-    for sub in os.listdir(piece_dir):
-        sub_p = os.path.join(piece_dir, sub)
-        if os.path.isdir(sub_p) and ("print" in sub.lower() or sub.lower() == "prints"):
-            prints_dir = sub_p
-            break
-    if prints_dir:
-        for fname in sorted(os.listdir(prints_dir)):
-            if fname.lower().endswith((".jpg", ".jpeg", ".png")):
-                add(os.path.join(prints_dir, fname), os.path.basename(piece_dir))
-
+    is_pd = (meta.get("product_type") or "").lower() == "pd_bundle" or bool(meta.get("bundle_dir"))
     bundle_dir = meta_bundle_dir(piece_dir)
-    if bundle_dir:
+
+    if is_pd and bundle_dir and os.path.isdir(bundle_dir):
+        for root, _dirs, files in os.walk(bundle_dir):
+            for fname in sorted(files):
+                if fname.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    add(os.path.join(root, fname), "bundle")
+        if images:
+            return images[:max_count]
+
+    # Single listing (or PD with empty bundle): this piece only
+    add(os.path.join(piece_dir, "master.png"), "cover")
+    src = meta.get("source_image") or meta.get("cover_image")
+    if src:
+        if not os.path.isabs(src):
+            src = os.path.join(piece_dir, src)
+        add(src, "source")
+    if bundle_dir and os.path.isdir(bundle_dir):
         for root, _dirs, files in os.walk(bundle_dir):
             for fname in sorted(files):
                 if fname.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
@@ -307,15 +303,27 @@ def list_bundle_images(piece_dir, max_count=200):
 def meta_bundle_dir(piece_dir):
     meta_path = os.path.join(piece_dir, "meta.json")
     if not os.path.exists(meta_path):
+        # Prefer local bundle/ even without meta
+        for name in ("bundle", "bundle_images", "digital_files"):
+            candidate = os.path.join(piece_dir, name)
+            if os.path.isdir(candidate):
+                return candidate
         return None
     try:
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         bundle = meta.get("bundle_dir") or meta.get("bundle_images_dir")
-        if bundle and os.path.isdir(bundle):
-            return bundle
+        if bundle:
+            if not os.path.isabs(bundle):
+                bundle = os.path.join(piece_dir, bundle)
+            if os.path.isdir(bundle):
+                return bundle
     except Exception:
         pass
+    for name in ("bundle", "bundle_images", "digital_files", "images"):
+        candidate = os.path.join(piece_dir, name)
+        if os.path.isdir(candidate):
+            return candidate
     for name in ("bundle", "bundle_images", "images"):
         candidate = os.path.join(os.path.dirname(piece_dir), name)
         if os.path.isdir(candidate):
@@ -384,40 +392,76 @@ def normalize_placement(placement):
 
 
 def assign_prints_to_quads(print_paths, quads):
-    """Match images to frame openings by aspect ratio (portrait→portrait, etc.)."""
+    """Match images to frames by aspect; spread unique images before repeating."""
     n = len(quads)
     if n == 0:
         return []
-    pool = [p for p in print_paths if p]
-    if not pool:
+    unique = []
+    seen = set()
+    for p in print_paths or []:
+        if not p:
+            continue
+        key = os.path.normcase(os.path.abspath(p))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(p)
+    if not unique:
         return []
-    while len(pool) < n:
-        pool.append(pool[len(pool) % len(print_paths)])
 
     frame_aspects = [quad_frame_aspect(q) for q in quads]
-    img_aspects = [image_aspect(p) for p in pool]
-    used = set()
-    assignments = [None] * n
-    order = sorted(range(n), key=lambda i: abs(math.log(frame_aspects[i])), reverse=True)
+    img_aspects = []
+    for p in unique:
+        try:
+            img_aspects.append(image_aspect(p))
+        except Exception:
+            img_aspects.append(1.0)
 
+    assignments = [None] * n
+    used = set()
+    # Hardest (most extreme) frames first
+    order = sorted(range(n), key=lambda i: abs(math.log(max(frame_aspects[i], 1e-6))), reverse=True)
+
+    # Pass 1: each unique image at most once
     for fi in order:
         best_j = None
         best_score = 1e9
-        for j, _path in enumerate(pool):
+        for j in range(len(unique)):
             if j in used:
                 continue
-            score = abs(math.log(img_aspects[j] / frame_aspects[fi]))
+            score = abs(math.log(max(img_aspects[j], 1e-6) / max(frame_aspects[fi], 1e-6)))
             if score < best_score:
                 best_score = score
                 best_j = j
         if best_j is None:
-            best_j = fi % len(pool)
+            break
         used.add(best_j)
-        assignments[fi] = pool[best_j]
+        assignments[fi] = unique[best_j]
 
-    for i in range(n):
-        if assignments[i] is None:
-            assignments[i] = pool[i % len(pool)]
+    # Pass 2: fill leftovers — prefer least-used images (even spread)
+    usage = [0] * len(unique)
+    for a in assignments:
+        if not a:
+            continue
+        for j, p in enumerate(unique):
+            if p == a:
+                usage[j] += 1
+                break
+
+    for fi in range(n):
+        if assignments[fi] is not None:
+            continue
+        best_j = 0
+        best_key = None
+        for j in range(len(unique)):
+            score = abs(math.log(max(img_aspects[j], 1e-6) / max(frame_aspects[fi], 1e-6)))
+            key = (usage[j], score)
+            if best_key is None or key < best_key:
+                best_key = key
+                best_j = j
+        assignments[fi] = unique[best_j]
+        usage[best_j] += 1
+
     return assignments
 
 
@@ -641,10 +685,16 @@ def ensure_print_resolution(print_img, quad, headroom=1.6):
     return print_img
 
 
-def prepare_print_image(path, trim_pct=0.0):
+def prepare_print_image(path, trim_pct=0.0, max_side=None):
     with Image.open(path) as raw:
         img = raw.convert("RGB")
     out, _warnings = sanitize_master(img, trim_pct)
+    if max_side and max(out.size) > max_side:
+        scale = max_side / float(max(out.size))
+        out = out.resize(
+            (max(1, int(round(out.size[0] * scale))), max(1, int(round(out.size[1] * scale)))),
+            Image.Resampling.LANCZOS,
+        )
     return out
 
 
@@ -807,7 +857,32 @@ def _composite_warp_core(print_img, base_img, quad, lighting_ref):
     return result, quad_bounds(quad)
 
 
-def generate_mockups_for_piece(piece_dir):
+def pick_pool_image_for_orientation(pool_paths, want_orientation):
+    """Pick a pack image matching portrait/landscape/square for single-frame mockups."""
+    if not pool_paths:
+        return None
+    want = (want_orientation or "portrait").lower()
+    scored = []
+    for p in pool_paths:
+        try:
+            a = image_aspect(p)
+        except Exception:
+            continue
+        if 0.92 <= a <= 1.08:
+            orient = "square"
+        elif a >= 1.08:
+            orient = "landscape"
+        else:
+            orient = "portrait"
+        score = 0 if orient == want else (1 if want == "square" or orient == "square" else 2)
+        scored.append((score, p))
+    if not scored:
+        return pool_paths[0]
+    scored.sort(key=lambda x: x[0])
+    return scored[0][1]
+
+
+def generate_mockups_for_piece(piece_dir, only_templates=None, fast=False):
     meta_path = os.path.join(piece_dir, "meta.json")
     if not os.path.exists(meta_path):
         print(f"Error: meta.json not found in {piece_dir}")
@@ -818,10 +893,13 @@ def generate_mockups_for_piece(piece_dir):
         
     orientation = meta.get("orientation", "portrait")
     trim_pct = meta.get("trim_margin", 0)
+    product_type = (meta.get("product_type") or "").strip().lower()
+    is_pd_bundle = product_type == "pd_bundle" or bool(meta.get("bundle_dir")) or meta.get("skip_print_crops")
+    only_set = set(only_templates) if only_templates else None
     quality_warnings = []
     
     master_path = os.path.join(piece_dir, "master.png")
-    if os.path.exists(master_path):
+    if (not fast) and os.path.exists(master_path):
         with Image.open(master_path) as m:
             quality_warnings.extend(scan_image_quality(m.convert("RGB")))
     
@@ -836,14 +914,22 @@ def generate_mockups_for_piece(piece_dir):
     for name in os.listdir(piece_dir):
         sub = os.path.join(piece_dir, name)
         if os.path.isdir(sub) and ("print" in name.lower() or name == "prints"):
-            jpgs = [f for f in os.listdir(sub) if f.lower().endswith(".jpg")]
+            jpgs = [f for f in os.listdir(sub) if f.lower().endswith((".jpg", ".jpeg", ".png"))]
             if jpgs:
                 prints_dir = sub
                 break
+
+    pool_images = list_bundle_images(piece_dir, max_count=500)
+    pool_paths = [img["path"] for img in pool_images]
                 
-    if not prints_dir:
+    if not prints_dir and not is_pd_bundle and not os.path.exists(master_path):
         print(f"Error: Could not find prints folder containing JPEGs in {piece_dir}")
         return False
+    if is_pd_bundle and not pool_paths and not os.path.exists(master_path):
+        print(f"Error: PD bundle has no images in bundle/ and no master.png")
+        return False
+    if is_pd_bundle:
+        print(f"PD bundle mode: {len(pool_paths)} image(s) in pool — skipping print-ratio requirement.")
         
     # Deduce style tags to select matching mockups
     style_tag = "neutral"
@@ -870,6 +956,19 @@ def generate_mockups_for_piece(piece_dir):
     if not filtered_templates:
         filtered_templates = templates
 
+    prefs = meta.get("mockup_prefs") or {}
+    selected = prefs.get("selected_templates") or []
+    disabled = set(prefs.get("disabled_mockups") or [])
+    if only_set:
+        filtered_templates = [t for t in filtered_templates if t.get("name") in only_set]
+        print(f"Only regenerating {len(filtered_templates)} template(s): {', '.join(sorted(only_set))}")
+    elif selected:
+        selected_set = set(selected)
+        filtered_templates = [t for t in filtered_templates if t.get("name") in selected_set]
+        print(f"Using {len(filtered_templates)} selected template(s) from mockup_prefs.")
+    elif disabled:
+        filtered_templates = [t for t in filtered_templates if t.get("name") not in disabled]
+
     # Prefer calibrated templates; diagram blanks are not used
     filtered_templates = sorted(
         filtered_templates,
@@ -879,20 +978,31 @@ def generate_mockups_for_piece(piece_dir):
     generated_count = 0
     primary_mockup_img = None
     primary_box = None
+    ss_override = 1 if fast else None
+    print_max_side = 1600 if fast else None
 
-    # Remove stale composites so only calibrated templates reappear
+    # Full regen: wipe all mockups. Partial (--only): delete just those stems so other JPGs stay.
     for fname in os.listdir(piece_dir):
-        if fname.lower().startswith("mockup_") and fname.lower().endswith((".jpg", ".jpeg")):
-            try:
-                os.remove(os.path.join(piece_dir, fname))
-            except OSError:
-                pass
+        if not (fname.lower().startswith("mockup_") and fname.lower().endswith((".jpg", ".jpeg"))):
+            continue
+        stem = fname[len("mockup_"):].rsplit(".", 1)[0]
+        if only_set is not None and stem not in only_set:
+            continue
+        try:
+            os.remove(os.path.join(piece_dir, fname))
+        except OSError:
+            pass
     
     for template in filtered_templates:
         if not is_template_calibrated(template):
             print(f"Skipping uncalibrated template {template['name']} (calibrate in Mockup Studio first).")
             continue
-        if template.get("orientation") != orientation:
+        tpl_orient = template.get("orientation") or orientation
+        is_multi = bool(template.get("quads"))
+        # PD packs: allow any orientation for multi-frame; single-frame match by art later
+        if not is_pd_bundle and not is_multi and tpl_orient != orientation:
+            continue
+        if template.get("name") in disabled and not selected:
             continue
             
         template_img_path = os.path.join(HERE, template["image"])
@@ -902,11 +1012,27 @@ def generate_mockups_for_piece(piece_dir):
             
         aspect = template.get("aspect")
         source_file = best_composite_source(piece_dir, prints_dir, aspect)
+        # Per-template art override (single-frame pack hero choice)
+        overrides = meta.get("single_frame_sources") or {}
+        tpl_name_early = template.get("name") or ""
+        if tpl_name_early in overrides:
+            ov = resolve_print_path(piece_dir, overrides[tpl_name_early])
+            if ov:
+                source_file = ov
+        # Or placements with a single frame / single quad
+        saved_one = (meta.get("mockup_placements") or {}).get(tpl_name_early, {})
+        saved_frames = saved_one.get("frames") or []
+        if not template.get("quads") and saved_frames and saved_frames[0].get("image"):
+            ov = resolve_print_path(piece_dir, saved_frames[0]["image"])
+            if ov:
+                source_file = ov
+        if not source_file and pool_paths:
+            source_file = pick_pool_image_for_orientation(pool_paths, tpl_orient)
         if not source_file and "quads" not in template:
             print(f"Warning: No source image found for template {template['name']}. Skipping.")
             continue
             
-        print(f"Compositing onto mockup {template['name']}...")
+        print(f"Compositing onto mockup {template['name']}{' (fast)' if fast else ''}...")
         
         try:
             with Image.open(template_img_path) as raw_tpl:
@@ -922,10 +1048,8 @@ def generate_mockups_for_piece(piece_dir):
 
                 saved = meta.get("mockup_placements", {}).get(tpl_name, {})
                 saved_frames = saved.get("frames", [])
-                pool_paths = [img["path"] for img in list_bundle_images(piece_dir, max_count=500)]
-                if not pool_paths:
-                    pool_paths = gather_run_prints(piece_dir, prints_dir, frame_count)
-                auto_paths = assign_prints_to_quads(pool_paths, quads)
+                use_pool = pool_paths[:] if pool_paths else gather_run_prints(piece_dir, prints_dir, frame_count)
+                auto_paths = assign_prints_to_quads(use_pool, quads)
 
                 result_img = template_img.copy()
                 for idx, quad in enumerate(quads):
@@ -933,17 +1057,19 @@ def generate_mockups_for_piece(piece_dir):
                     image_ref = frame_placement.get("image") if frame_placement else None
                     print_path = resolve_print_path(piece_dir, image_ref) if image_ref else None
                     if not print_path:
-                        print_path = auto_paths[idx] if idx < len(auto_paths) else pool_paths[0]
+                        print_path = auto_paths[idx] if idx < len(auto_paths) else (use_pool[0] if use_pool else source_file)
 
-                    print_img = prepare_print_image(print_path, trim_pct)
+                    print_img = prepare_print_image(print_path, trim_pct, max_side=print_max_side)
                     placement = normalize_placement(frame_placement)
                     if use_region:
                         composite_warp_into(
-                            result_img, print_img, quad, lighting_ref=lighting_ref, placement=placement
+                            result_img, print_img, quad, lighting_ref=lighting_ref,
+                            placement=placement, supersample=ss_override,
                         )
                     else:
                         result_img, _ = composite_warp(
-                            print_img, result_img, quad, lighting_ref=lighting_ref, placement=placement
+                            print_img, result_img, quad, lighting_ref=lighting_ref,
+                            placement=placement, supersample=ss_override,
                         )
                     progress = {
                         "template": template["name"],
@@ -953,7 +1079,9 @@ def generate_mockups_for_piece(piece_dir):
                     print(f"__MOCKUP_PROGRESS__{json.dumps(progress)}", flush=True)
                     print(f"  Frame {idx + 1}/{frame_count} composited", flush=True)
                     
-                box = scale_box(template["box"], tpl_scale)
+                box = scale_box(template["box"], tpl_scale) if template.get("box") else [
+                    0, 0, template_img.size[0], template_img.size[1]
+                ]
                 left_b, top_b, right_b, bottom_b = box
                 
             else:
@@ -967,9 +1095,10 @@ def generate_mockups_for_piece(piece_dir):
                         (right, bottom),
                         (left, bottom)
                     ]
-                print_img = prepare_print_image(source_file, trim_pct)
+                print_img = prepare_print_image(source_file, trim_pct, max_side=print_max_side)
                 result_img, bounds = composite_warp(
-                    print_img, template_img, quad, lighting_ref=lighting_ref
+                    print_img, template_img, quad, lighting_ref=lighting_ref,
+                    supersample=ss_override,
                 )
                 left_b, top_b, right_b, bottom_b = bounds
 
@@ -977,7 +1106,8 @@ def generate_mockups_for_piece(piece_dir):
                 
             mockup_out_name = f"mockup_{template['name']}.jpg"
             mockup_out_path = os.path.join(piece_dir, mockup_out_name)
-            result_img.save(mockup_out_path, "JPEG", quality=95, subsampling=0)
+            jpeg_q = 88 if fast else 95
+            result_img.save(mockup_out_path, "JPEG", quality=jpeg_q, subsampling=0 if not fast else 2)
             print(f"  Saved mockup -> {mockup_out_path}")
             
             if primary_mockup_img is None:
@@ -989,8 +1119,8 @@ def generate_mockups_for_piece(piece_dir):
         except Exception as e:
             print(f"Error generating mockup for template {template['name']}: {e}")
             
-    # Zoom GIF is slow — only rebuild when enabled in piece prefs
-    include_zoom = meta.get("mockup_prefs", {}).get("include_zoom_gif", True)
+    # Zoom GIF is slow — skip on fast single-frame swaps; full regen still respects prefs
+    include_zoom = (not fast) and meta.get("mockup_prefs", {}).get("include_zoom_gif", True)
     if primary_mockup_img is not None and primary_box is not None and include_zoom:
         gif_out_path = os.path.join(piece_dir, "mockup_zoom.gif")
         generate_zoom_gif(primary_mockup_img, primary_box[0], primary_box[1], primary_box[2], primary_box[3], gif_out_path)
@@ -1000,6 +1130,7 @@ def generate_mockups_for_piece(piece_dir):
         "success": generated_count > 0,
         "generated": generated_count,
         "warnings": quality_warnings,
+        "fast": bool(fast),
     }
     summary_path = os.path.join(piece_dir, "mockup_summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
@@ -1009,11 +1140,17 @@ def generate_mockups_for_piece(piece_dir):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python generate_mockups.py <piece_directory_path>")
+        print("Usage: python generate_mockups.py <piece_directory_path> [--only name1,name2]")
         sys.exit(1)
         
     piece_path = sys.argv[1]
     if not os.path.isabs(piece_path):
         piece_path = os.path.abspath(piece_path)
+    only = None
+    if "--only" in sys.argv:
+        idx = sys.argv.index("--only")
+        if idx + 1 < len(sys.argv):
+            only = [x.strip() for x in sys.argv[idx + 1].split(",") if x.strip()]
         
-    generate_mockups_for_piece(piece_path)
+    ok = generate_mockups_for_piece(piece_path, only_templates=only)
+    sys.exit(0 if ok else 1)

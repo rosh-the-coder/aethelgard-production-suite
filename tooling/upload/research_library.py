@@ -11,6 +11,7 @@ LIBRARY_PATH = os.path.join(HERE, "research_library.json")
 DEFAULT_CATEGORIES = [
     "Competitor watch",
     "Mega bundle",
+    "Bundles",
     "Single print hero",
     "Niche idea",
     "Pricing ref",
@@ -73,6 +74,56 @@ def list_items(category=None, kind=None, q=None):
     }
 
 
+def slim_payload(kind, payload):
+    """Keep library files small — drop page dumps / giant blobs that break browser fetch."""
+    if not isinstance(payload, dict):
+        return {}
+    if kind == "listing":
+        keys = (
+            "data_source", "listing_id", "listing_url", "title", "price", "price_val",
+            "currency", "shop_name", "shop_url", "image", "views", "favorites",
+            "listing_reviews", "listing_age_months", "listing_age_label", "category",
+            "tags", "details", "est_total_sales", "est_monthly_sales",
+            "est_monthly_revenue", "est_conversion_rate", "est_visibility_score",
+            "estimate_notes", "captured_at", "message",
+        )
+        out = {k: payload.get(k) for k in keys if k in payload}
+        # Cap image to URL only (no data: URIs)
+        img = out.get("image") or ""
+        if isinstance(img, str) and (img.startswith("data:") or len(img) > 2000):
+            out["image"] = ""
+        if isinstance(out.get("estimate_notes"), list):
+            out["estimate_notes"] = [str(n)[:300] for n in out["estimate_notes"][:12]]
+        if isinstance(out.get("tags"), list):
+            out["tags"] = [str(t)[:70] for t in out["tags"][:20]]
+        return out
+    if kind == "shop":
+        keys = (
+            "data_source", "shop_name", "shop_url", "niche", "location", "opened_on",
+            "sales", "revenue", "active_listings", "conversion_rate", "rating",
+            "monthly_sales", "monthly_revenue", "message", "captured_at", "listings",
+        )
+        out = {k: payload.get(k) for k in keys if k in payload}
+        listings = out.get("listings")
+        if isinstance(listings, list):
+            slim_listings = []
+            for row in listings[:40]:
+                if not isinstance(row, dict):
+                    continue
+                slim_listings.append({
+                    "title": (row.get("title") or "")[:140],
+                    "price": row.get("price"),
+                    "url": row.get("url") or row.get("listing_url"),
+                    "image": (row.get("image") or "")[:500] if not str(row.get("image") or "").startswith("data:") else "",
+                    "est_monthly_sales": row.get("est_monthly_sales"),
+                    "est_monthly_revenue": row.get("est_monthly_revenue"),
+                })
+            out["listings"] = slim_listings
+        return out
+    # keyword / other
+    return {k: payload[k] for k in list(payload.keys())[:40]}
+
+
 def add_item(kind, payload, category=None, notes="", title=None, tags=None):
     kind = (kind or "listing").strip().lower()
     if kind not in ("listing", "shop", "keyword"):
@@ -82,7 +133,7 @@ def add_item(kind, payload, category=None, notes="", title=None, tags=None):
     if cat not in lib["categories"]:
         lib["categories"].append(cat)
 
-    payload = payload if isinstance(payload, dict) else {}
+    payload = slim_payload(kind, payload if isinstance(payload, dict) else {})
     auto_title = title
     if not auto_title:
         if kind == "listing":

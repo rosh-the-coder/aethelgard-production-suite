@@ -447,43 +447,6 @@
     ]
   },
   {
-    "name": "japandi_single_sideboard_4x5_b",
-    "image": "templates/japandi_single_sideboard_4x5_b.png",
-    "orientation": "portrait",
-    "aspect": "4:5",
-    "tags": [
-      "japandi",
-      "minimalist",
-      "neutral"
-    ],
-    "needs_calibration": true,
-    "source": "higgsfield",
-    "quad": [
-      [
-        1299,
-        1290
-      ],
-      [
-        2412,
-        1198
-      ],
-      [
-        2338,
-        3317
-      ],
-      [
-        1224,
-        3409
-      ]
-    ],
-    "box": [
-      1224,
-      1198,
-      2412,
-      3409
-    ]
-  },
-  {
     "name": "japandi_trio_console_monstera_4x5_a",
     "image": "templates/japandi_trio_console_monstera_4x5_a.png",
     "orientation": "portrait",
@@ -1244,54 +1207,69 @@
     "orientation": "portrait",
     "aspect": "4:5",
     "box": [
-      1404,
-      1456,
-      2647,
-      3249
+      1553,
+      1691,
+      2468,
+      3031
     ],
     "tags": [
       "neutral"
     ],
     "calibrated": true,
-    "quads": [
+    "quad": [
       [
-        [
-          1496,
-          1456
-        ],
-        [
-          2647,
-          1517
-        ],
-        [
-          2556,
-          3249
-        ],
-        [
-          1404,
-          3188
-        ]
+        1622,
+        1691
       ],
       [
-        [
-          2966,
-          3177
-        ],
-        [
-          3709,
-          3177
-        ],
-        [
-          3709,
-          4606
-        ],
-        [
-          2966,
-          4606
-        ]
+        2468,
+        1703
+      ],
+      [
+        2399,
+        3031
+      ],
+      [
+        1553,
+        2951
       ]
+    ]
+  },
+  {
+    "name": "japandi_single_sideboard_4x5_b",
+    "image": "templates/japandi_single_sideboard_4x5_b.png",
+    "orientation": "portrait",
+    "aspect": "4:5",
+    "box": [
+      930,
+      1518,
+      1992,
+      3327
     ],
-    "layout": "multi_frame",
-    "frame_count": 2
+    "tags": [
+      "boho",
+      "minimalist",
+      "japandi",
+      "neutral"
+    ],
+    "calibrated": true,
+    "quad": [
+      [
+        930,
+        1518
+      ],
+      [
+        1867,
+        1586
+      ],
+      [
+        1992,
+        3214
+      ],
+      [
+        1065,
+        3327
+      ]
+    ]
   }
 ]

@@ -231,12 +231,13 @@ def parse_mockup_stdout(stdout, piece_dir, success):
     return generated, warnings, success
 
 
-def start_mockup_job(piece_dir):
+def start_mockup_job(piece_dir, only_templates=None):
     job_id = uuid.uuid4().hex[:10]
     initial = {
         "status": "running",
         "piece_dir": piece_dir,
         "started_at": time.time(),
+        "only_templates": list(only_templates or []),
     }
     with MOCKUP_JOBS_LOCK:
         MOCKUP_JOBS[job_id] = initial
@@ -248,6 +249,8 @@ def start_mockup_job(piece_dir):
 
     def worker():
         cmd = [PYTHON_EXE, MOCKUPS_SCRIPT, piece_dir]
+        if only_templates:
+            cmd += ["--only", ",".join(only_templates)]
         stdout_lines = []
         try:
             print(f"Running command: {' '.join(cmd)}")
@@ -499,8 +502,34 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(out).encode("utf-8"))
             return
 
+        # API: Typography editor font catalog
+        if path == "/api/poster_fonts":
+            try:
+                from poster_compose import list_editor_fonts
+                fonts = list_editor_fonts()
+            except Exception:
+                fonts = [{"family": "Arial", "style": "sans", "google": None}]
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"fonts": fonts}).encode("utf-8"))
+            return
+
+        # API: Saved research library (must be before /api/research — that prefix would steal this path)
+        if path == "/api/research_library":
+            from research_library import list_items
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            category = (qs.get("category") or ["all"])[0]
+            kind = (qs.get("kind") or ["all"])[0]
+            q = (qs.get("q") or [""])[0]
+            self.send_response(200)
+            self.send_header("Content-type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(list_items(category=category, kind=kind, q=q), ensure_ascii=False).encode("utf-8"))
+            return
+
         # API: Etsy Keyword Research
-        if self.path.startswith("/api/research"):
+        if path == "/api/research":
             parsed_url = urllib.parse.urlparse(self.path)
             params = urllib.parse.parse_qs(parsed_url.query)
             query = params.get("q", [""])[0]
@@ -532,7 +561,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
 
         # API: Etsy Shop Analysis
-        if self.path.startswith("/api/analyze_shop"):
+        if path == "/api/analyze_shop" or self.path.startswith("/api/analyze_shop?"):
             parsed_url = urllib.parse.urlparse(self.path)
             params = urllib.parse.parse_qs(parsed_url.query)
             shop_name = params.get("name", [""])[0].strip()
@@ -583,27 +612,15 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(payload or {"waiting": True}).encode("utf-8"))
             return
 
-        # API: Saved research library
-        if path == "/api/research_library":
-            from research_library import list_items
-            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            category = (qs.get("category") or ["all"])[0]
-            kind = (qs.get("kind") or ["all"])[0]
-            q = (qs.get("q") or [""])[0]
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(list_items(category=category, kind=kind, q=q)).encode("utf-8"))
-            return
-
         # API: Public-domain Met search
         if path == "/api/public_domain/search":
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             q = (qs.get("q") or [""])[0]
-            limit = (qs.get("limit") or ["24"])[0]
+            limit = (qs.get("limit") or ["48"])[0]
+            offset = (qs.get("offset") or ["0"])[0]
             try:
                 from public_domain import search_met
-                results = search_met(q, limit=limit)
+                results, meta = search_met(q, limit=limit, offset=offset, return_meta=True)
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
@@ -612,7 +629,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     "results": results,
                     "count": len(results),
                     "source": "met_open_access",
-                    "note": "Met Open Access only — verify before commercial use.",
+                    "queries_tried": meta.get("queries_tried") or [],
+                    "expanded": bool(meta.get("expanded")),
+                    "offset": meta.get("offset", 0),
+                    "has_more": bool(meta.get("has_more")),
+                    "total_ranked": meta.get("total_ranked", len(results)),
+                    "note": meta.get("note") or "Met Open Access only — verify before commercial use.",
                 }).encode("utf-8"))
             except Exception as e:
                 self.send_response(500)
@@ -722,7 +744,14 @@ a{{color:#c5a880}}</style></head><body>
                     self.wfile.write(err_html.encode("utf-8"))
                     return
 
-            data = json.loads(post_data.decode("utf-8"))
+            try:
+                data = json.loads(post_data.decode("utf-8") or "{}")
+            except json.JSONDecodeError as je:
+                self.send_response(400)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": f"Invalid JSON body: {je}"}).encode("utf-8"))
+                return
             
             # API: Save metadata edits
             if path == "/api/save":
@@ -753,7 +782,31 @@ a{{color:#c5a880}}</style></head><body>
                     }).encode("utf-8"))
                     return
 
-                job_id = start_mockup_job(piece_dir)
+                selected_templates = data.get("templates") or data.get("selected_templates")
+                only_templates = data.get("only_templates")
+                persist_selection = bool(data.get("persist_selection"))
+                if selected_templates is not None and persist_selection:
+                    # Persist listing selection (Pick mockup templates flow)
+                    templates_path = os.path.join(ROOT_DIR, "tooling", "mockups", "templates.json")
+                    all_names = []
+                    if os.path.exists(templates_path):
+                        try:
+                            with open(templates_path, "r", encoding="utf-8") as f:
+                                all_names = [t.get("name") for t in json.load(f) if t.get("name")]
+                        except Exception:
+                            pass
+                    selected_set = set(selected_templates)
+                    disabled = [n for n in all_names if n not in selected_set]
+                    self.save_mockup_prefs(
+                        piece_dir, disabled, include_zoom_gif=False,
+                        selected_templates=list(selected_templates),
+                    )
+                    only_templates = list(selected_templates)
+                elif selected_templates and not only_templates:
+                    # Backward compatible: treat templates as this-job-only filter
+                    only_templates = list(selected_templates)
+
+                job_id = start_mockup_job(piece_dir, only_templates=only_templates)
                 templates_path = os.path.join(ROOT_DIR, "tooling", "mockups", "templates.json")
                 calibrated_count = 0
                 needs_cal_count = 0
@@ -781,7 +834,7 @@ a{{color:#c5a880}}</style></head><body>
                     "calibrated_count": calibrated_count,
                     "needs_calibration_count": needs_cal_count,
                     "message": (
-                        f"{calibrated_count} calibrated template(s) will run; "
+                        f"{calibrated_count} calibrated template(s) available; "
                         f"{needs_cal_count} skipped until calibrated."
                     ),
                 }).encode("utf-8"))
@@ -803,6 +856,67 @@ a{{color:#c5a880}}</style></head><body>
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": success}).encode("utf-8"))
+                return
+
+            # API: Choose art for a single-frame mockup (and optional listing cover)
+            if path == "/api/single_frame_source":
+                piece_dir = data.get("piece_dir")
+                template_name = data.get("template")
+                image_ref = data.get("image")
+                set_as_cover = bool(data.get("set_as_cover"))
+                refresh = data.get("refresh", True)
+                if not piece_dir or not os.path.isdir(piece_dir) or not image_ref:
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "success": False,
+                        "error": "Need piece_dir and image",
+                    }).encode("utf-8"))
+                    return
+                success, err = self.save_single_frame_source(
+                    piece_dir, template_name, image_ref, set_as_cover=set_as_cover,
+                )
+                mockup_rel = None
+                master_rel = None
+                elapsed_ms = 0
+                if success and template_name and refresh:
+                    t0 = time.time()
+                    try:
+                        sys.path.insert(0, MOCKUPS_DIR)
+                        import generate_mockups as gm
+                        import importlib
+                        importlib.reload(gm)
+                        ok = gm.generate_mockups_for_piece(
+                            piece_dir, only_templates=[template_name], fast=True,
+                        )
+                        if not ok:
+                            success = False
+                            err = err or "Fast mockup refresh failed"
+                        else:
+                            out_name = f"mockup_{template_name}.jpg"
+                            out_path = os.path.join(piece_dir, out_name)
+                            if os.path.isfile(out_path):
+                                mockup_rel = os.path.relpath(out_path, ROOT_DIR).replace("\\", "/")
+                    except Exception as e:
+                        success = False
+                        err = str(e)
+                    elapsed_ms = int((time.time() - t0) * 1000)
+                if success and set_as_cover:
+                    master_path = os.path.join(piece_dir, "master.png")
+                    if os.path.isfile(master_path):
+                        master_rel = os.path.relpath(master_path, ROOT_DIR).replace("\\", "/")
+                self.send_response(200 if success else 500)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "success": success,
+                    "error": err,
+                    "mockup_rel": mockup_rel,
+                    "master_rel": master_rel,
+                    "template": template_name,
+                    "elapsed_ms": elapsed_ms,
+                }).encode("utf-8"))
                 return
 
             # API: Generate PDF
@@ -1092,7 +1206,7 @@ a{{color:#c5a880}}</style></head><body>
                 }).encode('utf-8'))
                 return
 
-            # API: Import public-domain Met objects as candidates
+            # API: Import public-domain Met objects as candidates (always a pack)
             if path == "/api/public_domain/import":
                 objects = data.get("objects") or []
                 concept = (data.get("concept") or "public domain vintage").strip()
@@ -1104,26 +1218,42 @@ a{{color:#c5a880}}</style></head><body>
                     return
                 try:
                     from public_domain import import_objects_to_run
-                    run_dir, candidates, errors = import_objects_to_run(objects, RUNS_DIR, concept=concept)
+                    run_dir, candidates, errors, manifest = import_objects_to_run(
+                        objects, RUNS_DIR, concept=concept, trim_borders=True
+                    )
                     for c in candidates:
                         full = c["path"].replace("/", os.sep)
                         c["rel_path"] = os.path.relpath(full, ROOT_DIR).replace("\\", "/")
                         c["path"] = full.replace("\\", "/")
+                    pack_title = concept.title() if concept else "Vintage Print Pack"
                     titles = [
-                        f"{(o.get('title') or 'Vintage Print')[:80]} Wall Art, Printable Vintage Decor"
-                        for o in objects[:3]
+                        f"{pack_title} — {len(candidates)}+ Vintage Digital Prints Bundle",
+                        f"{pack_title} Gallery Wall Set, Printable Public Domain Art Pack",
+                        f"Vintage Art Bundle ({len(candidates)} Prints), Eclectic Gallery Wall Download",
                     ]
+                    err_note = None
+                    if errors and candidates:
+                        err_note = f"Imported {len(candidates)}; {len(errors)} failed."
                     self.send_response(200 if candidates else 500)
                     self.send_header("Content-type", "application/json")
                     self.end_headers()
                     self.wfile.write(json.dumps({
                         "success": bool(candidates),
+                        "product_type": "pd_bundle",
+                        "pack_title": pack_title,
                         "candidates": candidates,
                         "suggested_titles": titles,
                         "run_dir": run_dir.replace("\\", "/"),
+                        "manifest": manifest,
                         "errors": errors,
                         "error": None if candidates else (errors[0]["error"] if errors else "Import failed"),
+                        "warning": err_note,
                     }).encode("utf-8"))
+                except ValueError as e:
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
                 except Exception as e:
                     self.send_response(500)
                     self.send_header("Content-type", "application/json")
@@ -1208,12 +1338,20 @@ a{{color:#c5a880}}</style></head><body>
                             errors.append({"label": label, "error": "No raw image produced"})
                             continue
                         raw_path = os.path.join(raw_dir, raws[-1])
+                        layers = None
+                        try:
+                            from poster_compose import default_layers_for_layout
+                            layers = default_layers_for_layout(headline, subtext, layout=layout)
+                        except Exception:
+                            layers = None
                         png_bytes = compose_poster(
                             raw_path,
                             headline=headline,
                             subtext=subtext,
                             aspect=aspect,
                             layout=layout,
+                            accent_circle=(layout == "hero_stack"),
+                            layers=layers,
                         )
                         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
                         out_path = os.path.join(candidates_dir, f"{ts}_{label}-composed.png")
@@ -1223,9 +1361,16 @@ a{{color:#c5a880}}</style></head><body>
                             "label": label,
                             "rel_path": os.path.relpath(out_path, ROOT_DIR).replace("\\", "/"),
                             "path": out_path.replace("\\", "/"),
+                            "raw_path": raw_path.replace("\\", "/"),
+                            "raw_rel": os.path.relpath(raw_path, ROOT_DIR).replace("\\", "/"),
                             "prompt": f"{visual} | headline={headline} | sub={subtext}",
                             "model": model,
                             "aspect": aspect,
+                            "layout": layout,
+                            "headline": headline,
+                            "subtext": subtext,
+                            "text_layers": layers or [],
+                            "product_kind": "graphic_poster",
                         })
 
                     titles = [
@@ -1251,18 +1396,175 @@ a{{color:#c5a880}}</style></head><body>
                     self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
                 return
 
+            # API: Re-burn poster typography from editable layers (Figma-ish editor export)
+            if path == "/api/recompose_poster":
+                base_path = (data.get("base_path") or data.get("raw_path") or "").replace("/", os.sep)
+                out_path = (data.get("out_path") or data.get("path") or "").replace("/", os.sep)
+                layers = data.get("layers") or data.get("text_layers") or []
+                aspect = data.get("aspect") or "4:5"
+                layout = data.get("layout") or "hero_stack"
+                paper_tint = data.get("paper_tint", True)
+                accent_circle = bool(data.get("accent_circle"))
+                pad_subject = float(data.get("pad_subject") or (0.08 if layout == "museum" else 0))
+                base_b64 = data.get("base_png_b64") or data.get("base_image_b64")
+                if base_b64 and base_path:
+                    try:
+                        import base64
+                        raw = base64.b64decode(base_b64)
+                        os.makedirs(os.path.dirname(base_path) or ".", exist_ok=True)
+                        with open(base_path, "wb") as f:
+                            f.write(raw)
+                    except Exception as e:
+                        self.send_response(400)
+                        self.send_header("Content-type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"success": False, "error": f"Failed to save patched base: {e}"}).encode("utf-8"))
+                        return
+                if not base_path or not os.path.isfile(base_path):
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "base/raw image missing"}).encode("utf-8"))
+                    return
+                if not out_path:
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "out_path required"}).encode("utf-8"))
+                    return
+                try:
+                    from poster_compose import compose_from_layers
+                    png_bytes = compose_from_layers(
+                        base_path,
+                        layers=layers,
+                        aspect=aspect,
+                        paper_tint=paper_tint,
+                        accent_circle=accent_circle,
+                        long_edge=2000,
+                        pad_subject=pad_subject,
+                    )
+                    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+                    with open(out_path, "wb") as f:
+                        f.write(png_bytes)
+                    # Persist layer sidecar next to output for reopen
+                    side = out_path.rsplit(".", 1)[0] + ".layers.json"
+                    with open(side, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "layers": layers,
+                            "aspect": aspect,
+                            "layout": layout,
+                            "base_path": base_path.replace("\\", "/"),
+                            "pad_subject": pad_subject,
+                            "accent_circle": accent_circle,
+                        }, f, indent=2)
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "success": True,
+                        "path": out_path.replace("\\", "/"),
+                        "rel_path": os.path.relpath(out_path, ROOT_DIR).replace("\\", "/"),
+                        "layers": layers,
+                        "base_updated": bool(base_b64),
+                    }).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
+            # API: Re-burn typography on an existing Catalog piece (master + prints)
+            if path == "/api/recompose_catalog_piece":
+                piece_dir = (data.get("piece_dir") or "").replace("/", os.sep)
+                layers = data.get("layers") or data.get("text_layers") or []
+                refresh_prints = bool(data.get("refresh_prints", True))
+                if not piece_dir or not os.path.isdir(piece_dir):
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "piece_dir required"}).encode("utf-8"))
+                    return
+                try:
+                    result = self.recompose_catalog_piece(piece_dir, layers, data, refresh_prints=refresh_prints)
+                    self.send_response(200 if result.get("success") else 500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
+            # API: Ensure Catalog piece has poster_base + layers so Edit type always opens
+            if path == "/api/bootstrap_poster_edit":
+                piece_dir = (data.get("piece_dir") or "").replace("/", os.sep)
+                if not piece_dir or not os.path.isdir(piece_dir):
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "piece_dir required"}).encode("utf-8"))
+                    return
+                try:
+                    result = self.bootstrap_poster_edit(piece_dir)
+                    self.send_response(200 if result.get("success") else 500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
             # API: Finalize Selected Winners
             if path == "/api/finalize_selected":
                 run_dir = data.get("run_dir")
                 keepers = data.get("keepers", [])
                 trim_margin = float(data.get("trim_margin", 0))
-                
-                result = self.finalize_selected_keepers(run_dir, keepers, trim_margin)
+                mode = (data.get("mode") or "").strip().lower()
+                selected_templates = data.get("selected_templates") or []
+                pack_title = data.get("pack_title") or ""
+                if mode == "pd_bundle" or data.get("product_type") == "pd_bundle":
+                    result = self.finalize_pd_bundle(
+                        run_dir, keepers,
+                        pack_title=pack_title,
+                        selected_templates=selected_templates,
+                        trim_borders=True,
+                    )
+                else:
+                    result = self.finalize_selected_keepers(run_dir, keepers, trim_margin)
                 status = 200 if result.get("any_success") else 500
                 self.send_response(status)
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps(result).encode('utf-8'))
+                return
+
+            # API: Auto-place pack images into selected multi-frame mockups
+            if path == "/api/pd_bundle_autoplace":
+                piece_dir = (data.get("piece_dir") or "").replace("/", os.sep)
+                template_names = data.get("templates") or []
+                if not piece_dir or not os.path.isdir(piece_dir):
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "piece_dir required"}).encode("utf-8"))
+                    return
+                try:
+                    result = self.pd_bundle_autoplace(piece_dir, template_names)
+                    self.send_response(200 if result.get("success") else 500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
                 return
 
             # API: Auto-detect frame openings in mockup photo
@@ -1326,12 +1628,68 @@ a{{color:#c5a880}}</style></head><body>
                 piece_dir = data.get("piece_dir")
                 disabled = data.get("disabled_mockups", [])
                 include_zoom = data.get("include_zoom_gif", True)
-                success = self.save_mockup_prefs(piece_dir, disabled, include_zoom)
+                selected = data.get("selected_templates", None)
+                success = self.save_mockup_prefs(piece_dir, disabled, include_zoom, selected_templates=selected)
                 self.send_response(200 if success else 500)
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": success}).encode('utf-8'))
                 return
+
+            if path == "/api/delete_piece":
+                piece_dir = (data.get("piece_dir") or "").replace("/", os.sep)
+                if not piece_dir or not os.path.isdir(piece_dir):
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "Invalid piece_dir"}).encode("utf-8"))
+                    return
+                # Safety: only delete under artwork-runs
+                runs_norm = os.path.normcase(os.path.abspath(RUNS_DIR))
+                piece_norm = os.path.normcase(os.path.abspath(piece_dir))
+                if not piece_norm.startswith(runs_norm + os.sep) and piece_norm != runs_norm:
+                    self.send_response(403)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "Path not under artwork-runs"}).encode("utf-8"))
+                    return
+                if not os.path.exists(os.path.join(piece_dir, "meta.json")):
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "Not a catalog piece (missing meta.json)"}).encode("utf-8"))
+                    return
+                try:
+                    import shutil
+                    parent = os.path.dirname(piece_dir)
+                    shutil.rmtree(piece_dir)
+                    # Remove empty run folder
+                    if os.path.isdir(parent) and parent.startswith(os.path.abspath(RUNS_DIR)):
+                        leftover = [x for x in os.listdir(parent) if not x.startswith(".")]
+                        if not leftover:
+                            try:
+                                os.rmdir(parent)
+                            except OSError:
+                                pass
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": True}).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
+            # Unknown POST route — always reply (avoids browser "Failed to fetch")
+            self.send_response(404)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "success": False,
+                "error": f"Unknown API route: {path}. Restart the Production Suite server to load new endpoints.",
+            }).encode("utf-8"))
         except Exception as e:
             print(f"Exception in POST handler: {e}")
             try:
@@ -1463,11 +1821,19 @@ a{{color:#c5a880}}</style></head><body>
                                 f for f in os.listdir(sub) if f.lower().endswith(".jpg")
                             ])
                     
+                    try:
+                        mtime = os.path.getmtime(meta_path)
+                    except OSError:
+                        mtime = 0
+
                     run_data["pieces"].append({
                         "title": meta.get("title"),
                         "slug": meta.get("slug"),
                         "path": piece_path,
+                        "product_type": meta.get("product_type") or "print",
+                        "bundle_count": meta.get("bundle_count"),
                         "orientation": meta.get("orientation"),
+                        "aspect": meta.get("aspect") or (meta.get("typography") or {}).get("aspect"),
                         "sizes": meta.get("sizes", []),
                         "prompt": meta.get("prompt"),
                         "price": meta.get("price", "4.99"),
@@ -1480,6 +1846,9 @@ a{{color:#c5a880}}</style></head><body>
                         "mockups": rel_mockups,
                         "all_mockups": rel_all_mockups,
                         "mockup_prefs": mockup_prefs,
+                        "mockup_placements": meta.get("mockup_placements") or {},
+                        "single_frame_sources": meta.get("single_frame_sources") or {},
+                        "cover_image": meta.get("cover_image"),
                         "zoom_gif": rel_zoom,
                         "has_pdf": has_pdf,
                         "pdf_path": meta.get("pdf_path"),
@@ -1488,6 +1857,10 @@ a{{color:#c5a880}}</style></head><body>
                         "print_jpg_count": print_jpg_count,
                         "calibrated_mockup_count": len(all_mockup_files),
                         "quality_warnings": quality_warnings,
+                        "mtime": mtime,
+                        "run_name": run_name,
+                        "text_layers": meta.get("text_layers") or (meta.get("typography") or {}).get("layers") or [],
+                        "typography": self._typography_catalog_payload(piece_path, meta),
                     })
                 except Exception as e:
                     print(f"Error reading piece {piece_name}: {e}")
@@ -1496,6 +1869,289 @@ a{{color:#c5a880}}</style></head><body>
                 runs.append(run_data)
                 
         return runs
+
+    def _typography_catalog_payload(self, piece_path, meta):
+        """Normalize typography fields for Catalog UI."""
+        typo = dict(meta.get("typography") or {})
+        layers = meta.get("text_layers") or typo.get("layers") or []
+
+        # Recover layers from sidecar next to master (written by recompose)
+        if not layers:
+            for name in ("master.layers.json", "master.png.layers.json"):
+                side = os.path.join(piece_path, name)
+                if not os.path.isfile(side) and name == "master.png.layers.json":
+                    side = os.path.join(piece_path, "master.layers.json")
+                if os.path.isfile(side):
+                    try:
+                        with open(side, "r", encoding="utf-8") as f:
+                            side_data = json.load(f)
+                        layers = side_data.get("layers") or []
+                        if layers and not typo.get("aspect"):
+                            typo["aspect"] = side_data.get("aspect") or typo.get("aspect")
+                            typo["layout"] = side_data.get("layout") or typo.get("layout")
+                        break
+                    except Exception:
+                        pass
+            # Also any *.layers.json in the piece folder
+            if not layers:
+                try:
+                    for fname in os.listdir(piece_path):
+                        if fname.lower().endswith(".layers.json"):
+                            with open(os.path.join(piece_path, fname), "r", encoding="utf-8") as f:
+                                side_data = json.load(f)
+                            layers = side_data.get("layers") or []
+                            if layers:
+                                typo.setdefault("aspect", side_data.get("aspect"))
+                                typo.setdefault("layout", side_data.get("layout"))
+                                break
+                except Exception:
+                    pass
+
+        poster_base = (typo.get("poster_base") or "").replace("/", os.sep)
+        if not poster_base:
+            candidate = os.path.join(piece_path, "poster_base.png")
+            if os.path.isfile(candidate):
+                poster_base = candidate
+        # Fallback: if base path stored in sidecar
+        if not poster_base or not os.path.isfile(poster_base):
+            try:
+                side = os.path.join(piece_path, "master.layers.json")
+                if os.path.isfile(side):
+                    with open(side, "r", encoding="utf-8") as f:
+                        side_data = json.load(f)
+                    bp = (side_data.get("base_path") or "").replace("/", os.sep)
+                    if bp and os.path.isfile(bp):
+                        # Copy into piece so future edits are self-contained
+                        dest = os.path.join(piece_path, "poster_base.png")
+                        if not os.path.isfile(dest):
+                            import shutil
+                            shutil.copy(bp, dest)
+                        poster_base = dest if os.path.isfile(dest) else bp
+            except Exception:
+                pass
+
+        master_path = os.path.join(piece_path, "master.png")
+        has_base = bool(poster_base and os.path.isfile(poster_base))
+        # Editable if we have a base art file; layers optional (can add text fresh)
+        editable = has_base
+        # Also treat graphic posters / chilli runs as candidates even without base
+        # (button still shows; open will guide the user)
+        product_kind = (meta.get("product_kind") or "").strip()
+        run_hint = (meta.get("run_dir") or piece_path or "").lower()
+        looks_poster = product_kind == "graphic_poster" or "poster_" in run_hint.replace("\\", "/")
+
+        payload = {
+            "editable": editable,
+            "layers": layers,
+            "aspect": typo.get("aspect") or meta.get("aspect") or "4:5",
+            "layout": typo.get("layout") or "hero_stack",
+            "poster_base_path": poster_base.replace("\\", "/") if poster_base else "",
+            "poster_base_rel": (
+                os.path.relpath(poster_base, ROOT_DIR).replace("\\", "/")
+                if poster_base and os.path.isfile(poster_base) else ""
+            ),
+            "master_path": master_path.replace("\\", "/"),
+            "looks_poster": looks_poster,
+            "has_layers": bool(layers),
+        }
+        return payload
+
+    def bootstrap_poster_edit(self, piece_dir):
+        """Make any Catalog piece editable: ensure poster_base.png + typography meta exist."""
+        import shutil
+        meta_path = os.path.join(piece_dir, "meta.json")
+        master_path = os.path.join(piece_dir, "master.png")
+        if not os.path.isfile(meta_path):
+            return {"success": False, "error": "meta.json missing"}
+        if not os.path.isfile(master_path):
+            return {"success": False, "error": "master.png missing"}
+
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        typo = dict(meta.get("typography") or {})
+        layers = meta.get("text_layers") or typo.get("layers") or []
+        bootstrapped = False
+
+        # Recover layers from sidecars
+        if not layers:
+            for fname in os.listdir(piece_dir):
+                if fname.lower().endswith(".layers.json"):
+                    try:
+                        with open(os.path.join(piece_dir, fname), "r", encoding="utf-8") as f:
+                            side = json.load(f)
+                        layers = side.get("layers") or []
+                        typo.setdefault("aspect", side.get("aspect"))
+                        typo.setdefault("layout", side.get("layout"))
+                        if layers:
+                            break
+                    except Exception:
+                        pass
+
+        poster_base = os.path.join(piece_dir, "poster_base.png")
+        existing = (typo.get("poster_base") or "").replace("/", os.sep)
+        if existing and os.path.isfile(existing):
+            if os.path.abspath(existing) != os.path.abspath(poster_base):
+                try:
+                    shutil.copy(existing, poster_base)
+                except Exception:
+                    poster_base = existing
+        elif not os.path.isfile(poster_base):
+            # Try run_dir raws
+            run_dir = (meta.get("run_dir") or "").replace("/", os.sep)
+            found_raw = None
+            if run_dir and os.path.isdir(run_dir):
+                raw_dir = os.path.join(run_dir, "_poster_raw")
+                search_dirs = [raw_dir, os.path.join(run_dir, "_candidates"), run_dir]
+                for d in search_dirs:
+                    if not os.path.isdir(d):
+                        continue
+                    pngs = sorted(
+                        [os.path.join(d, f) for f in os.listdir(d)
+                         if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+                         and "raw" in f.lower()],
+                        key=lambda p: os.path.getmtime(p),
+                        reverse=True,
+                    )
+                    if not pngs:
+                        pngs = sorted(
+                            [os.path.join(d, f) for f in os.listdir(d)
+                             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))],
+                            key=lambda p: os.path.getmtime(p),
+                            reverse=True,
+                        )
+                    if pngs:
+                        found_raw = pngs[0]
+                        break
+            if found_raw and os.path.isfile(found_raw):
+                shutil.copy(found_raw, poster_base)
+            else:
+                # Last resort: use master (text may be burned in — user heals with marquee)
+                shutil.copy(master_path, poster_base)
+                bootstrapped = True
+
+        typo.update({
+            "editable": True,
+            "layers": layers,
+            "aspect": typo.get("aspect") or meta.get("aspect") or "4:5",
+            "layout": typo.get("layout") or "hero_stack",
+            "poster_base": poster_base.replace("\\", "/"),
+            "master_path": master_path.replace("\\", "/"),
+            "bootstrapped_from_master": bootstrapped,
+        })
+        meta["typography"] = typo
+        meta["text_layers"] = layers
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+
+        payload = self._typography_catalog_payload(piece_dir, meta)
+        payload["bootstrapped_from_master"] = bootstrapped
+        return {
+            "success": True,
+            "typography": payload,
+            "layers": layers,
+            "bootstrapped_from_master": bootstrapped,
+        }
+
+    def recompose_catalog_piece(self, piece_dir, layers, data=None, refresh_prints=True):
+        """Re-burn text layers onto poster_base → master.png and optionally refresh print crops."""
+        import shutil
+        data = data or {}
+        meta_path = os.path.join(piece_dir, "meta.json")
+        if not os.path.isfile(meta_path):
+            return {"success": False, "error": "meta.json missing"}
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        typo = meta.get("typography") or {}
+        base_path = (typo.get("poster_base") or "").replace("/", os.sep)
+        if not base_path or not os.path.isfile(base_path):
+            alt = os.path.join(piece_dir, "poster_base.png")
+            if os.path.isfile(alt):
+                base_path = alt
+        if not base_path or not os.path.isfile(base_path):
+            # Auto-bootstrap from master so Apply never dead-ends
+            master_path = os.path.join(piece_dir, "master.png")
+            if os.path.isfile(master_path):
+                base_path = os.path.join(piece_dir, "poster_base.png")
+                shutil.copy(master_path, base_path)
+            else:
+                return {"success": False, "error": "poster_base.png missing — cannot re-edit type for this listing"}
+
+        base_b64 = data.get("base_png_b64") or data.get("base_image_b64")
+        if base_b64:
+            try:
+                import base64
+                raw = base64.b64decode(base_b64)
+                with open(base_path, "wb") as f:
+                    f.write(raw)
+            except Exception as e:
+                return {"success": False, "error": f"Failed to save patched base: {e}"}
+
+        aspect = data.get("aspect") or typo.get("aspect") or meta.get("aspect") or "4:5"
+        layout = data.get("layout") or typo.get("layout") or "hero_stack"
+        pad_subject = float(data.get("pad_subject") or (0.08 if layout == "museum" else 0))
+        master_path = os.path.join(piece_dir, "master.png")
+
+        from poster_compose import compose_from_layers
+        png_bytes = compose_from_layers(
+            base_path,
+            layers=layers,
+            aspect=aspect,
+            paper_tint=True,
+            accent_circle=False,
+            long_edge=2000,
+            pad_subject=pad_subject,
+        )
+        with open(master_path, "wb") as f:
+            f.write(png_bytes)
+
+        typo.update({
+            "editable": True,
+            "layers": layers,
+            "aspect": aspect,
+            "layout": layout,
+            "poster_base": base_path.replace("\\", "/"),
+            "master_path": master_path.replace("\\", "/"),
+        })
+        meta["typography"] = typo
+        meta["text_layers"] = layers
+        meta["aspect"] = aspect
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+
+        side = master_path.rsplit(".", 1)[0] + ".layers.json"
+        with open(side, "w", encoding="utf-8") as f:
+            json.dump({"layers": layers, "aspect": aspect, "layout": layout, "base_path": base_path.replace("\\", "/")}, f, indent=2)
+
+        prints_refreshed = False
+        if refresh_prints:
+            artwork_script = os.path.join(
+                ROOT_DIR, ".claude", "skills", "artwork-orchestrator", "scripts", "artwork.py"
+            )
+            if os.path.isfile(artwork_script):
+                cmd = [
+                    PYTHON_EXE, artwork_script, "finalize", meta_path,
+                    "--upscale-mode", "lanczos",
+                ]
+                ok, stdout, stderr = self.run_subprocess(cmd)
+                prints_refreshed = bool(ok)
+                if ok:
+                    piece_slug = meta.get("slug") or os.path.basename(piece_dir)
+                    default_prints = os.path.join(piece_dir, "prints")
+                    named_prints = os.path.join(piece_dir, f"{piece_slug}_prints")
+                    if os.path.exists(default_prints) and not os.path.exists(named_prints):
+                        try:
+                            os.rename(default_prints, named_prints)
+                        except Exception:
+                            pass
+
+        return {
+            "success": True,
+            "master_rel": os.path.relpath(master_path, ROOT_DIR).replace("\\", "/"),
+            "layers": layers,
+            "prints_refreshed": prints_refreshed,
+        }
 
     def save_metadata(self, piece_dir, title, description, tags, price, quantity):
         meta_path = os.path.join(piece_dir, "meta.json")
@@ -1662,24 +2318,23 @@ a{{color:#c5a880}}</style></head><body>
 
     def finalize_selected_keepers(self, run_dir, keepers, trim_margin=0):
         import shutil
-        results = []
-        
-        for k in keepers:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def finalize_one(k):
             source_image = (k.get("source_image") or "").replace("/", os.sep)
             label = clean_win_text(k.get("label") or "art")
             title = clean_win_text(k.get("title") or f"Print {label}")
-            piece_dir = None
-            error_msg = None
-            
+
             if not source_image or not os.path.exists(source_image):
-                error_msg = f"Source image not found: {k.get('source_image')}"
-                results.append({"title": title, "label": label, "success": False, "error": error_msg})
-                continue
+                return {
+                    "title": title, "label": label, "success": False,
+                    "error": f"Source image not found: {k.get('source_image')}",
+                }
 
             piece_slug = self.make_piece_slug(title, label, run_dir)
             piece_dir = os.path.join(run_dir, piece_slug)
             os.makedirs(piece_dir, exist_ok=True)
-            
+
             dest_master = os.path.join(piece_dir, "master.png")
             try:
                 from PIL import Image
@@ -1688,10 +2343,47 @@ a{{color:#c5a880}}</style></head><body>
                     im.save(dest_master, format="PNG")
             except Exception:
                 shutil.copy(source_image, dest_master)
-            
+
+            # Preserve poster typography for Catalog re-edit
+            typography = None
+            text_layers = k.get("text_layers")
+            raw_src = (k.get("raw_path") or "").replace("/", os.sep)
+            product_kind = (k.get("product_kind") or "").strip()
+            aspect_early = (k.get("aspect") or "").strip() or "4:5"
+            if text_layers or product_kind == "graphic_poster" or raw_src:
+                poster_base = os.path.join(piece_dir, "poster_base.png")
+                if raw_src and os.path.isfile(raw_src):
+                    try:
+                        shutil.copy(raw_src, poster_base)
+                    except Exception:
+                        poster_base = None
+                else:
+                    try:
+                        shutil.copy(dest_master, poster_base)
+                    except Exception:
+                        poster_base = None
+                if poster_base and os.path.isfile(poster_base):
+                    typography = {
+                        "editable": bool(text_layers),
+                        "layers": text_layers or [],
+                        "aspect": aspect_early,
+                        "layout": k.get("layout") or "hero_stack",
+                        "poster_base": poster_base.replace("\\", "/"),
+                        "master_path": dest_master.replace("\\", "/"),
+                    }
+
             tags = ["printable wall art", "digital art print", "wall decor"]
-            description = "Welcome to Aethelgard Art Co.!\n\nThis is a high-resolution 300 DPI digital print ready for instant download and printing in over 20+ frame sizes.\n\nIncluded files are formatted for aspect ratios:\n- 4:5 (for sizes 4x5, 8x10, 16x20 inches)\n- 3:2 (for sizes 4x6, 6x9, 8x12, 12x18, 20x30 inches)\n- 11:14 paper size\n\nThank you for supporting our shop!"
-            
+            description = (
+                "Welcome to Aethelgard Art Co.!\n\n"
+                "This is a high-resolution 300 DPI digital print ready for instant download "
+                "and printing in over 20+ frame sizes.\n\n"
+                "Included files are formatted for aspect ratios:\n"
+                "- 4:5 (for sizes 4x5, 8x10, 16x20 inches)\n"
+                "- 3:2 (for sizes 4x6, 6x9, 8x12, 12x18, 20x30 inches)\n"
+                "- 11:14 paper size\n\n"
+                "Thank you for supporting our shop!"
+            )
+
             presets_path = os.path.join(HERE, "niche_presets.json")
             if os.path.exists(presets_path):
                 try:
@@ -1705,10 +2397,20 @@ a{{color:#c5a880}}</style></head><body>
                         matched_niche = next((n for n in presets.get("niches", []) if n["id"] == "dark_academia"), None)
                     elif "mushroom" in run_name_lower or "botanical" in run_name_lower or "specimen" in run_name_lower:
                         matched_niche = next((n for n in presets.get("niches", []) if n["id"] == "vintage_specimen"), None)
-                        
+
                     if matched_niche:
                         tags = matched_niche.get("starter_tags", tags)
-                        description = f"Welcome to Aethelgard Art Co.!\n\nThis is a premium high-resolution 300 DPI digital print ready for instant download.\n\nStyle: {matched_niche.get('name')}\n\nDescription: {matched_niche.get('summary')}\n\nIncluded files are formatted for standard frame aspect ratios:\n- 4:5 ratio (for printing: 4x5\", 8x10\", 12x15\", 16x20\", 40x50cm)\n- 3:2 ratio (for printing: 4x6\", 6x9\", 8x12\", 12x18\", 20x30\", 24x36\", 60x90cm)\n- 11:14\" paper size\n\nThank you for choosing Aethelgard Art Co.!"
+                        description = (
+                            f"Welcome to Aethelgard Art Co.!\n\n"
+                            f"This is a premium high-resolution 300 DPI digital print ready for instant download.\n\n"
+                            f"Style: {matched_niche.get('name')}\n\n"
+                            f"Description: {matched_niche.get('summary')}\n\n"
+                            f"Included files are formatted for standard frame aspect ratios:\n"
+                            f"- 4:5 ratio (for printing: 4x5\", 8x10\", 12x15\", 16x20\", 40x50cm)\n"
+                            f"- 3:2 ratio (for printing: 4x6\", 6x9\", 8x12\", 12x18\", 20x30\", 24x36\", 60x90cm)\n"
+                            f"- 11:14\" paper size\n\n"
+                            f"Thank you for choosing Aethelgard Art Co.!"
+                        )
                 except Exception as e:
                     print(f"Error loading presets for finalization: {e}")
 
@@ -1716,63 +2418,96 @@ a{{color:#c5a880}}</style></head><body>
             aspect = (k.get("aspect") or "").strip()
             if aspect in ("3:2", "16:9"):
                 orientation = "landscape"
-            
+
             piece_meta = {
                 "run_dir": run_dir.replace("\\", "/"),
                 "title": title,
                 "slug": piece_slug,
                 "source_image": dest_master.replace("\\", "/"),
                 "orientation": orientation,
+                "aspect": aspect or aspect_early,
                 "sizes": "all",
                 "model": clean_win_text(k.get("model", "nano-banana-pro")),
                 "prompt": clean_win_text(k.get("prompt", "")),
                 "upscale": 4,
+                "upscale_mode": "lanczos",
                 "price": "5.99",
                 "quantity": "999",
                 "trim_margin": trim_margin,
                 "seo": {
                     "title": f"{title} - Printable Wall Art, Vintage Digital Print Decor",
                     "tags": tags,
-                    "description": description
-                }
+                    "description": description,
+                },
             }
-            
+            if typography:
+                piece_meta["product_kind"] = product_kind or "graphic_poster"
+                piece_meta["text_layers"] = typography.get("layers") or []
+                piece_meta["typography"] = typography
+
             meta_json_path = os.path.join(piece_dir, "meta.json")
             with open(meta_json_path, "w", encoding="utf-8") as f:
                 json.dump(piece_meta, f, indent=2)
-                
-            artwork_script = os.path.join(ROOT_DIR, ".claude", "skills", "artwork-orchestrator", "scripts", "artwork.py")
-            cmd_finalize = [PYTHON_EXE, artwork_script, "finalize", meta_json_path]
+
+            artwork_script = os.path.join(
+                ROOT_DIR, ".claude", "skills", "artwork-orchestrator", "scripts", "artwork.py"
+            )
+            # Fast path: Lanczos (seconds) — Real-ESRGAN is optional later from Catalog
+            cmd_finalize = [
+                PYTHON_EXE, artwork_script, "finalize", meta_json_path,
+                "--upscale-mode", "lanczos",
+            ]
             res, stdout, stderr = self.run_subprocess(cmd_finalize)
-            
+
             if res:
                 default_prints = os.path.join(piece_dir, "prints")
                 named_prints = os.path.join(piece_dir, f"{piece_slug}_prints")
                 if os.path.exists(default_prints) and not os.path.exists(named_prints):
                     os.rename(default_prints, named_prints)
-                
-                self.run_subprocess([PYTHON_EXE, MOCKUPS_SCRIPT, piece_dir])
-                results.append({
+                # Do NOT block on full mockup library — user regenerates in Catalog (seconds per template)
+                return {
                     "title": title,
                     "label": label,
                     "success": True,
                     "piece_dir": piece_dir.replace("\\", "/"),
-                })
-            else:
-                error_msg = stderr_tail(stderr) or stderr_tail(stdout) or "Finalize pipeline failed (check server console)."
-                print(f"Finalize failed for {title}: {error_msg}")
-                results.append({
-                    "title": title,
-                    "label": label,
-                    "success": False,
-                    "error": error_msg,
-                    "piece_dir": piece_dir.replace("\\", "/"),
-                })
-                
-        artwork_script = os.path.join(ROOT_DIR, ".claude", "skills", "artwork-orchestrator", "scripts", "artwork.py")
+                    "mockups_deferred": True,
+                }
+
+            error_msg = stderr_tail(stderr) or stderr_tail(stdout) or "Finalize pipeline failed (check server console)."
+            print(f"Finalize failed for {title}: {error_msg}")
+            return {
+                "title": title,
+                "label": label,
+                "success": False,
+                "error": error_msg,
+                "piece_dir": piece_dir.replace("\\", "/"),
+            }
+
+        results = []
+        workers = min(4, max(1, len(keepers)))
+        if len(keepers) <= 1:
+            results = [finalize_one(k) for k in keepers]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(finalize_one, k): k for k in keepers}
+                for fut in as_completed(futures):
+                    try:
+                        results.append(fut.result())
+                    except Exception as e:
+                        k = futures[fut]
+                        results.append({
+                            "title": clean_win_text(k.get("title") or k.get("label") or "art"),
+                            "label": clean_win_text(k.get("label") or "art"),
+                            "success": False,
+                            "error": str(e),
+                        })
+
+        artwork_script = os.path.join(
+            ROOT_DIR, ".claude", "skills", "artwork-orchestrator", "scripts", "artwork.py"
+        )
         cmd_index = [PYTHON_EXE, artwork_script, "index", run_dir]
         self.run_subprocess(cmd_index)
-        
+
         any_success = any(r.get("success") for r in results)
         if any_success and all(r.get("success") for r in results):
             candidates_dir = os.path.join(run_dir, "_candidates")
@@ -1788,6 +2523,245 @@ a{{color:#c5a880}}</style></head><body>
             "finalized_count": sum(1 for r in results if r.get("success")),
             "total": len(results),
             "results": results,
+        }
+
+    def finalize_pd_bundle(self, run_dir, keepers, pack_title="", selected_templates=None, trim_borders=True):
+        """One Catalog piece = one Etsy listing; images stay native-aspect in bundle/."""
+        import shutil
+        from PIL import Image
+
+        if not run_dir or not os.path.isdir(run_dir):
+            return {
+                "success": False,
+                "any_success": False,
+                "finalized_count": 0,
+                "total": 0,
+                "results": [{"title": pack_title or "Pack", "success": False, "error": "Invalid run_dir"}],
+            }
+        if not keepers:
+            return {
+                "success": False,
+                "any_success": False,
+                "finalized_count": 0,
+                "total": 0,
+                "results": [{"title": pack_title or "Pack", "success": False, "error": "No images selected"}],
+            }
+
+        title = clean_win_text(pack_title or keepers[0].get("title") or "Vintage Print Pack")
+        piece_slug = self.make_piece_slug(title, "pack", run_dir)
+        piece_dir = os.path.join(run_dir, piece_slug)
+        bundle_dir = os.path.join(piece_dir, "bundle")
+        os.makedirs(bundle_dir, exist_ok=True)
+
+        try:
+            from pd_prep import prep_image_file, classify_aspect
+        except ImportError:
+            prep_image_file = None
+            classify_aspect = None
+
+        copied = []
+        orientations = {"portrait": 0, "landscape": 0, "square": 0}
+        for i, k in enumerate(keepers):
+            source_image = (k.get("source_image") or "").replace("/", os.sep)
+            if not source_image or not os.path.exists(source_image):
+                continue
+            stem = clean_win_text(k.get("file_stem") or k.get("art_title") or k.get("label") or f"print-{i+1}")
+            stem = re.sub(r"[^\w\s-]", "", stem.lower()).strip()
+            stem = re.sub(r"[\s_-]+", "-", stem)[:48].strip("-") or f"print-{i+1}"
+            dest = os.path.join(bundle_dir, f"{i+1:02d}-{stem}.png")
+            try:
+                if prep_image_file:
+                    prep = prep_image_file(source_image, dest, trim_borders=trim_borders)
+                    orient = prep.get("orientation") or "portrait"
+                else:
+                    with Image.open(source_image) as im:
+                        im = im.convert("RGB")
+                        im.save(dest, format="PNG")
+                        w, h = im.size
+                    if classify_aspect:
+                        _, orient, _ = classify_aspect(w, h)
+                    else:
+                        orient = "landscape" if w > h * 1.08 else ("square" if abs(w - h) / max(w, h) < 0.08 else "portrait")
+                    prep = {"orientation": orient}
+                orientations[orient] = orientations.get(orient, 0) + 1
+                copied.append({
+                    "file": os.path.basename(dest),
+                    "path": dest.replace("\\", "/"),
+                    "label": k.get("label"),
+                    "art_title": k.get("art_title") or k.get("title"),
+                    "orientation": orient,
+                    "aspect": (prep or {}).get("aspect") or k.get("aspect"),
+                    "attribution": k.get("attribution"),
+                })
+            except Exception as e:
+                print(f"PD bundle copy failed for {source_image}: {e}")
+
+        if not copied:
+            try:
+                shutil.rmtree(piece_dir)
+            except Exception:
+                pass
+            return {
+                "success": False,
+                "any_success": False,
+                "finalized_count": 0,
+                "total": 1,
+                "results": [{"title": title, "success": False, "error": "No valid source images"}],
+            }
+
+        # Cover / catalog preview = first pack member (native aspect)
+        master_path = os.path.join(piece_dir, "master.png")
+        try:
+            shutil.copy(copied[0]["path"].replace("/", os.sep), master_path)
+        except Exception:
+            with Image.open(copied[0]["path"].replace("/", os.sep)) as im:
+                im.convert("RGB").save(master_path, format="PNG")
+
+        dominant = max(orientations, key=orientations.get) if any(orientations.values()) else "portrait"
+        if orientations.get("landscape", 0) and orientations.get("portrait", 0):
+            dominant = "mixed"
+
+        tags = [
+            "printable wall art", "digital art print", "vintage art bundle",
+            "gallery wall set", "public domain art", "instant download",
+            "eclectic gallery wall", "museum print pack", "printable vintage prints",
+            "digital download art", "wall decor set", "art print collection",
+        ]
+        description = (
+            f"Welcome to Aethelgard Art Co.!\n\n"
+            f"This digital download pack includes {len(copied)} high-resolution vintage / public-domain art prints "
+            f"for your gallery wall. Files keep their native proportions (portrait, landscape, and square as applicable) — "
+            f"no forced crop to a single frame size.\n\n"
+            f"Delivery: PDF guide + Google Drive folder with all print-ready PNGs.\n\n"
+            f"Always verify public-domain / Open Access status for commercial use.\n\n"
+            f"Thank you for supporting our shop!"
+        )
+
+        selected = [t for t in (selected_templates or []) if t]
+        piece_meta = {
+            "run_dir": run_dir.replace("\\", "/"),
+            "title": title,
+            "slug": piece_slug,
+            "source_image": master_path.replace("\\", "/"),
+            "product_type": "pd_bundle",
+            "bundle_dir": bundle_dir.replace("\\", "/"),
+            "bundle_count": len(copied),
+            "bundle_orientations": orientations,
+            "orientation": "portrait" if dominant == "mixed" else dominant,
+            "orientation_mode": dominant,
+            "sizes": "native",
+            "model": "public-domain-met",
+            "prompt": f"Public domain pack: {title}",
+            "upscale": 0,
+            "price": "12.99",
+            "quantity": "999",
+            "trim_margin": 0,
+            "seo": {
+                "title": f"{title} — {len(copied)} Vintage Digital Prints Bundle, Gallery Wall Set",
+                "tags": tags,
+                "description": description,
+            },
+            "mockup_prefs": {
+                "disabled_mockups": [],
+                "selected_templates": selected,
+                "include_zoom_gif": False,
+            },
+            "mockup_placements": {},
+            "skip_print_crops": True,
+        }
+        meta_json_path = os.path.join(piece_dir, "meta.json")
+        with open(meta_json_path, "w", encoding="utf-8") as f:
+            json.dump(piece_meta, f, indent=2)
+
+        manifest = {
+            "product_type": "pd_bundle",
+            "title": title,
+            "count": len(copied),
+            "files": copied,
+            "delivery": "pdf_plus_google_drive",
+            "note": "Native aspects preserved; no AI print-ratio crops.",
+        }
+        with open(os.path.join(piece_dir, "bundle_manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+        artwork_script = os.path.join(ROOT_DIR, ".claude", "skills", "artwork-orchestrator", "scripts", "artwork.py")
+        self.run_subprocess([PYTHON_EXE, artwork_script, "index", run_dir])
+
+        # Keep _candidates until user is done; do not auto-generate mockups — picker comes next
+        return {
+            "success": True,
+            "any_success": True,
+            "finalized_count": 1,
+            "total": 1,
+            "product_type": "pd_bundle",
+            "needs_mockup_picker": True,
+            "piece_dir": piece_dir.replace("\\", "/"),
+            "bundle_count": len(copied),
+            "results": [{
+                "title": title,
+                "label": "pack",
+                "success": True,
+                "piece_dir": piece_dir.replace("\\", "/"),
+                "product_type": "pd_bundle",
+            }],
+        }
+
+    def pd_bundle_autoplace(self, piece_dir, template_names):
+        """Aspect-aware assign pack images into selected multi-frame templates."""
+        sys.path.insert(0, MOCKUPS_DIR)
+        import generate_mockups as gm
+
+        meta_path = os.path.join(piece_dir, "meta.json")
+        if not os.path.exists(meta_path):
+            return {"success": False, "error": "meta.json missing"}
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        templates_path = os.path.join(ROOT_DIR, "tooling", "mockups", "templates.json")
+        with open(templates_path, "r", encoding="utf-8") as f:
+            all_templates = json.load(f)
+        by_name = {t.get("name"): t for t in all_templates}
+
+        pool = [img["path"] for img in gm.list_bundle_images(piece_dir, max_count=500)]
+        if not pool:
+            return {"success": False, "error": "No bundle images found"}
+
+        placements = meta.get("mockup_placements") or {}
+        placed = []
+        for name in template_names or []:
+            t = by_name.get(name)
+            if not t or not t.get("quads"):
+                continue
+            quads = [tuple(tuple(pt) for pt in q) for q in t["quads"]]
+            paths = gm.assign_prints_to_quads(pool, quads)
+            frames = []
+            for p in paths:
+                try:
+                    if os.path.commonpath([os.path.abspath(p), os.path.abspath(piece_dir)]) == os.path.abspath(piece_dir):
+                        rel = os.path.relpath(p, piece_dir).replace("\\", "/")
+                    else:
+                        rel = p.replace("\\", "/")
+                except ValueError:
+                    rel = p.replace("\\", "/")
+                frames.append({"image": rel, "pan_x": 0.0, "pan_y": 0.0, "zoom": 1.0})
+            placements[name] = {"frames": frames}
+            placed.append({"template": name, "frames": len(frames)})
+
+        prefs = meta.get("mockup_prefs") or {}
+        prefs["selected_templates"] = list(template_names or [])
+        all_names = [t.get("name") for t in all_templates if t.get("name")]
+        selected_set = set(template_names or [])
+        prefs["disabled_mockups"] = [n for n in all_names if n not in selected_set]
+        meta["mockup_prefs"] = prefs
+        meta["mockup_placements"] = placements
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+
+        return {
+            "success": True,
+            "placed": placed,
+            "selected_templates": list(template_names or []),
+            "pool_count": len(pool),
         }
 
     def get_gemini_key(self):
@@ -1915,17 +2889,19 @@ a{{color:#c5a880}}</style></head><body>
             print(f"Error deleting mockup template: {e}")
             return False
 
-    def save_mockup_prefs(self, piece_dir, disabled_mockups, include_zoom_gif=True):
+    def save_mockup_prefs(self, piece_dir, disabled_mockups, include_zoom_gif=True, selected_templates=None):
         meta_path = os.path.join(piece_dir, "meta.json")
         if not os.path.exists(meta_path):
             return False
         try:
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
-            meta["mockup_prefs"] = {
-                "disabled_mockups": list(disabled_mockups or []),
-                "include_zoom_gif": bool(include_zoom_gif),
-            }
+            prefs = meta.get("mockup_prefs") or {}
+            prefs["disabled_mockups"] = list(disabled_mockups or [])
+            prefs["include_zoom_gif"] = bool(include_zoom_gif)
+            if selected_templates is not None:
+                prefs["selected_templates"] = list(selected_templates)
+            meta["mockup_prefs"] = prefs
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
             return True
@@ -1966,6 +2942,51 @@ a{{color:#c5a880}}</style></head><body>
         except Exception as e:
             print(f"Error saving mockup placements: {e}")
             return False
+
+    def save_single_frame_source(self, piece_dir, template_name, image_ref, set_as_cover=False):
+        """Remember which pack image fills a single-frame mockup; optionally update master.png."""
+        meta_path = os.path.join(piece_dir, "meta.json")
+        if not os.path.exists(meta_path):
+            return False, "meta.json missing"
+        try:
+            sys.path.insert(0, MOCKUPS_DIR)
+            import generate_mockups as gm
+            from shutil import copy2
+            resolved = gm.resolve_print_path(piece_dir, image_ref)
+            if not resolved or not os.path.isfile(resolved):
+                return False, f"Image not found: {image_ref}"
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            # Store piece-relative path when possible
+            try:
+                store_ref = os.path.relpath(resolved, piece_dir).replace("\\", "/")
+            except ValueError:
+                store_ref = image_ref
+            if template_name:
+                sources = meta.get("single_frame_sources") or {}
+                sources[template_name] = store_ref
+                meta["single_frame_sources"] = sources
+                # Also mirror into placements so Composer-style data stays consistent
+                placements = meta.get("mockup_placements") or {}
+                placements[template_name] = {
+                    "frames": [{"image": store_ref, "pan_x": 0, "pan_y": 0, "zoom": 1}],
+                }
+                meta["mockup_placements"] = placements
+            if set_as_cover:
+                dest = os.path.join(piece_dir, "master.png")
+                try:
+                    from PIL import Image
+                    with Image.open(resolved) as im:
+                        im.convert("RGB").save(dest, "PNG")
+                except Exception:
+                    copy2(resolved, dest)
+                meta["cover_image"] = store_ref
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+            return True, None
+        except Exception as e:
+            print(f"Error saving single_frame_source: {e}")
+            return False, str(e)
 
 def start_server(port=8080):
     server = ThreadingHTTPServer(('127.0.0.1', port), DashboardHandler)
