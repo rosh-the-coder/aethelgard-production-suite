@@ -313,7 +313,7 @@ def gen_cloudflare(prompt, model_id, aspect, n, refs):
                     "blurry, low quality, blank, black image, empty"
                 ),
             }
-            r = requests.post(url + "/", headers=headers, json=payload, timeout=180)
+            r = requests.post(url + "/", headers=headers, json=payload, timeout=300)
             ctype = (r.headers.get("Content-Type") or "").lower()
             if r.status_code != 200:
                 detail = r.text[:500]

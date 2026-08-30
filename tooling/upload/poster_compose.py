@@ -663,8 +663,9 @@ def compose_poster(
                 layer["color"] = headline_color
             if layer.get("id") == "subtext":
                 layer["color"] = sub_color
-    # Museum layout gets inset for negative space
-    pad = 0.08 if layout == "museum" else 0.0
+    # Never inset the subject on cream — that bakes fake mats into master.png
+    # and shows up as white borders inside lifestyle frames. Museum "space"
+    # comes from typography placement only (LAYOUTS margins / y positions).
     return compose_from_layers(
         base_image_path_or_bytes,
         layers=layers,
@@ -672,7 +673,7 @@ def compose_poster(
         paper_tint=paper_tint,
         accent_circle=accent_circle and layout == "hero_stack",
         long_edge=2000,
-        pad_subject=pad,
+        pad_subject=0.0,
     )
 
 

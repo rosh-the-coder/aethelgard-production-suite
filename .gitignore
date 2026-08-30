@@ -17,9 +17,28 @@ tooling/upload/.etsy-login-profile/
 tooling/upload/**/upload_status.json
 tooling/upload/listing_snapshots.json
 tooling/upload/research_library.json
+tooling/upload/etsy_tokens.json
+tooling/upload/etsy_app.json
+tooling/upload/.etsy_oauth_pending.json
 
 # Durable job state (local only)
 tooling/upload/.jobs/
+tooling/upload/.archive/
+tooling/upload/.factory/
+tooling/upload/.upload_staging/
+tooling/upload/_verify/
+tooling/upload/suite_settings.json
+
+# Google Drive OAuth (keep example file only)
+tooling/upload/gdrive_client.json
+tooling/upload/gdrive_tokens.json
+
+# Cached LoC gallery thumbs (JSON catalogs are committed)
+tooling/upload/data/loc_sets/*/
+
+# Node (Playwright helpers) — not needed to run the suite
+tooling/upload/node_modules/
+node_modules/
 
 # Playwright browsers (large)
 tooling/ad-creatives/.playwright-browsers/
@@ -31,6 +50,7 @@ tooling/upscale/
 # Generated runs (large print files / mockups / PDFs)
 tooling/digital-product-research/
 artwork-runs/
+_delivery/
 
 # Editor / OS / local agent noise
 .idea/

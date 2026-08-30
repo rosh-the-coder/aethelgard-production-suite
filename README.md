@@ -5,7 +5,7 @@
 **Operator status & next steps:** [`LAUNCH_PROGRESS.md`](./LAUNCH_PROGRESS.md)  
 **Full technical handover:** [`AETHELGARD_HANDOVER.md`](./AETHELGARD_HANDOVER.md)
 
-Local Windows dashboard (`tooling/upload/server.py` → `http://127.0.0.1:8080`) that turns concepts into print files, mockups, SEO copy, a Drive-linked delivery PDF, and an Etsy **draft** listing. Generator modes: AI, Public Domain (Met), Graphic Poster.
+Local Windows dashboard (`tooling/upload/server.py` → `http://127.0.0.1:8080`) that turns concepts into print files, mockups, SEO copy, a Drive-linked delivery PDF, and an Etsy **draft** listing. Generator modes: AI, Public Domain (Met), Graphic Poster. **Archive Studio** is the bulk open-access acquisition engine (see [`tooling/upload/docs/ARCHIVE_STUDIO.md`](./tooling/upload/docs/ARCHIVE_STUDIO.md)).
 
 ```powershell
 .\tooling\ad-creatives\.venv\Scripts\python.exe tooling\upload\server.py

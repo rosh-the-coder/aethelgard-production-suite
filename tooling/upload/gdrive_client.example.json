@@ -1,0 +1,14 @@
+{
+  "_comment": "Replace this file with the Desktop OAuth client JSON downloaded from Google Cloud Console (Credentials → OAuth client ID → Desktop). Keep the real file local — do not commit secrets.",
+  "installed": {
+    "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+    "project_id": "YOUR_PROJECT",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "client_secret": "YOUR_CLIENT_SECRET",
+    "redirect_uris": [
+      "http://localhost:8080/api/drive/oauth/callback",
+      "http://localhost"
+    ]
+  }
+}

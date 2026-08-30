@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import math
+import re
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -273,7 +274,7 @@ def list_bundle_images(piece_dir, max_count=200):
         except Exception:
             meta = {}
 
-    is_pd = (meta.get("product_type") or "").lower() == "pd_bundle" or bool(meta.get("bundle_dir"))
+    is_pd = (meta.get("product_type") or "").lower() in ("pd_bundle", "bundle") or bool(meta.get("bundle_dir"))
     bundle_dir = meta_bundle_dir(piece_dir)
 
     if is_pd and bundle_dir and os.path.isdir(bundle_dir):
@@ -882,7 +883,18 @@ def pick_pool_image_for_orientation(pool_paths, want_orientation):
     return scored[0][1]
 
 
-def generate_mockups_for_piece(piece_dir, only_templates=None, fast=False):
+def parse_mockup_variant(stem: str):
+    """Split 'template_r01' → ('template', '_r01', 'template_r01'). Plain name → (name, '', name)."""
+    stem = (stem or "").strip()
+    m = re.match(r"^(.*)_r(\d{2})$", stem, flags=re.IGNORECASE)
+    if m:
+        base, num = m.group(1), m.group(2)
+        suffix = f"_r{num}"
+        return base, suffix, f"{base}{suffix}"
+    return stem, "", stem
+
+
+def generate_mockups_for_piece(piece_dir, only_templates=None, fast=False, overview_only=False):
     meta_path = os.path.join(piece_dir, "meta.json")
     if not os.path.exists(meta_path):
         print(f"Error: meta.json not found in {piece_dir}")
@@ -894,8 +906,15 @@ def generate_mockups_for_piece(piece_dir, only_templates=None, fast=False):
     orientation = meta.get("orientation", "portrait")
     trim_pct = meta.get("trim_margin", 0)
     product_type = (meta.get("product_type") or "").strip().lower()
-    is_pd_bundle = product_type == "pd_bundle" or bool(meta.get("bundle_dir")) or meta.get("skip_print_crops")
-    only_set = set(only_templates) if only_templates else None
+    is_pd_bundle = product_type in ("pd_bundle", "bundle") or bool(meta.get("bundle_dir")) or meta.get("skip_print_crops")
+    # Jobs may request variant stems (template_r01) — resolve to base template + output suffix
+    only_jobs = []  # list of (base_name, out_suffix, placement_key)
+    if only_templates:
+        for raw in only_templates:
+            base, suffix, key = parse_mockup_variant(raw)
+            if base:
+                only_jobs.append((base, suffix, key))
+    only_bases = {j[0] for j in only_jobs} if only_jobs else None
     quality_warnings = []
     
     master_path = os.path.join(piece_dir, "master.png")
@@ -959,9 +978,76 @@ def generate_mockups_for_piece(piece_dir, only_templates=None, fast=False):
     prefs = meta.get("mockup_prefs") or {}
     selected = prefs.get("selected_templates") or []
     disabled = set(prefs.get("disabled_mockups") or [])
-    if only_set:
-        filtered_templates = [t for t in filtered_templates if t.get("name") in only_set]
-        print(f"Only regenerating {len(filtered_templates)} template(s): {', '.join(sorted(only_set))}")
+    overview_default = bool(is_pd_bundle)
+    generate_overviews = prefs.get("generate_overview_grids")
+    if generate_overviews is None:
+        generate_overviews = overview_default
+    else:
+        generate_overviews = bool(generate_overviews)
+    overview_max_sheets = int(prefs.get("overview_max_sheets") or 5)
+    overview_max_sheets = max(1, min(5, overview_max_sheets))
+
+    if overview_only:
+        overview_written = []
+        if pool_paths:
+            try:
+                from generate_overview_grids import generate_bundle_overview_grids
+                print(f"Building overview grids for {len(pool_paths)} artwork(s)…")
+                overview_written = generate_bundle_overview_grids(
+                    piece_dir,
+                    image_paths=pool_paths,
+                    max_sheets=overview_max_sheets,
+                )
+            except Exception as e:
+                print(f"Overview grid generation failed: {e}")
+        try:
+            prefs = meta.get("mockup_prefs") or {}
+            existing_order = [str(x) for x in (prefs.get("photo_order") or []) if x]
+            overview_names = [os.path.basename(p) for p in overview_written]
+            room_names = sorted(
+                f for f in os.listdir(piece_dir)
+                if f.lower().startswith("mockup_") and f.lower().endswith(".jpg")
+                and not f.lower().startswith("mockup_overview_")
+            )
+            new_order = []
+            if room_names:
+                new_order.append(room_names[0])
+            for n in overview_names:
+                if n not in new_order:
+                    new_order.append(n)
+            for n in existing_order:
+                if n not in new_order and os.path.isfile(os.path.join(piece_dir, n)):
+                    new_order.append(n)
+            for n in room_names[1:]:
+                if n not in new_order:
+                    new_order.append(n)
+            prefs["photo_order"] = new_order[:10]
+            prefs["generate_overview_grids"] = True
+            prefs["overview_max_sheets"] = overview_max_sheets
+            prefs["repeat_mockups"] = False
+            meta["mockup_prefs"] = prefs
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+        except Exception as e:
+            print(f"photo_order update warning: {e}")
+        generated_count = len(overview_written)
+        print(f"Overview-only complete for {os.path.basename(piece_dir)}. Generated {generated_count} grid(s).")
+        summary = {
+            "success": generated_count > 0,
+            "generated": generated_count,
+            "warnings": [],
+            "fast": bool(fast),
+            "overview_grids": generated_count,
+            "overview_only": True,
+        }
+        with open(os.path.join(piece_dir, "mockup_summary.json"), "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+        print("__MOCKUP_RESULT__" + json.dumps(summary))
+        return generated_count > 0
+
+    if only_bases is not None:
+        filtered_templates = [t for t in filtered_templates if t.get("name") in only_bases]
+        print(f"Only regenerating {len(filtered_templates)} template(s): {', '.join(sorted(only_bases))}")
     elif selected:
         selected_set = set(selected)
         filtered_templates = [t for t in filtered_templates if t.get("name") in selected_set]
@@ -969,58 +1055,160 @@ def generate_mockups_for_piece(piece_dir, only_templates=None, fast=False):
     elif disabled:
         filtered_templates = [t for t in filtered_templates if t.get("name") not in disabled]
 
-    # Prefer calibrated templates; diagram blanks are not used
     filtered_templates = sorted(
         filtered_templates,
         key=lambda t: (1 if t.get("name", "").startswith("blank_") else 0, t.get("name", "")),
     )
-        
+
     generated_count = 0
     primary_mockup_img = None
     primary_box = None
     ss_override = 1 if fast else None
     print_max_side = 1600 if fast else None
 
-    # Full regen: wipe all mockups. Partial (--only): delete just those stems so other JPGs stay.
+    jobs = []
+    by_name = {t.get("name"): t for t in filtered_templates}
+    if only_jobs:
+        for base, suffix, key in only_jobs:
+            tpl = by_name.get(base)
+            if tpl:
+                jobs.append((tpl, suffix, key))
+            else:
+                print(f"Warning: template '{base}' not found for job '{key}'.")
+    else:
+        for t in filtered_templates:
+            jobs.append((t, "", t.get("name") or ""))
+
+    def _should_wipe_stem(stem: str) -> bool:
+        low = stem.lower()
+        if low.startswith("overview_"):
+            return generate_overviews and not fast
+        base, suffix, key = parse_mockup_variant(stem)
+        if suffix:
+            return any(j[2] == key for j in jobs)
+        return any(j[0].get("name") == base and j[1] == "" for j in jobs)
+
     for fname in os.listdir(piece_dir):
         if not (fname.lower().startswith("mockup_") and fname.lower().endswith((".jpg", ".jpeg"))):
             continue
         stem = fname[len("mockup_"):].rsplit(".", 1)[0]
-        if only_set is not None and stem not in only_set:
+        if not _should_wipe_stem(stem):
             continue
         try:
             os.remove(os.path.join(piece_dir, fname))
         except OSError:
             pass
-    
-    for template in filtered_templates:
+
+    def _composite_one(template, source_paths_for_frames, out_suffix="", placement_key=None):
+        nonlocal generated_count, primary_mockup_img, primary_box
+        template_img_path = os.path.join(HERE, template["image"])
+        if not os.path.exists(template_img_path):
+            print(f"Warning: Template image {template_img_path} not found. Skipping.")
+            return False
+        with Image.open(template_img_path) as raw_tpl:
+            template_img, tpl_scale = scale_template_for_output(raw_tpl.convert("RGB"))
+        lighting_ref = template_img.copy()
+        trim_pct_local = trim_pct
+        place_key = placement_key or (template.get("name") or "")
+
+        if "quads" in template:
+            quads = [scale_quad([tuple(pt) for pt in q], tpl_scale) for q in template["quads"]]
+            frame_count = len(quads)
+            use_region = frame_count >= 4
+            result_img = template_img.copy()
+            saved = (meta.get("mockup_placements") or {}).get(place_key, {})
+            saved_frames = saved.get("frames") or []
+            for idx, quad in enumerate(quads):
+                print_path = source_paths_for_frames[idx] if idx < len(source_paths_for_frames) else (
+                    source_paths_for_frames[0] if source_paths_for_frames else None
+                )
+                if not print_path:
+                    continue
+                print_img = prepare_print_image(print_path, trim_pct_local, max_side=print_max_side)
+                frame_placement = saved_frames[idx] if idx < len(saved_frames) else {}
+                placement = {
+                    "pan_x": float(frame_placement.get("pan_x") or 0.0),
+                    "pan_y": float(frame_placement.get("pan_y") or 0.0),
+                    "zoom": float(frame_placement.get("zoom") or 1.0),
+                }
+                if use_region:
+                    composite_warp_into(
+                        result_img, print_img, quad, lighting_ref=lighting_ref,
+                        placement=placement, supersample=ss_override,
+                    )
+                else:
+                    result_img, _ = composite_warp(
+                        print_img, result_img, quad, lighting_ref=lighting_ref,
+                        placement=placement, supersample=ss_override,
+                    )
+            box = scale_box(template["box"], tpl_scale) if template.get("box") else [
+                0, 0, template_img.size[0], template_img.size[1]
+            ]
+            left_b, top_b, right_b, bottom_b = box
+        else:
+            source_file = source_paths_for_frames[0] if source_paths_for_frames else None
+            if not source_file:
+                return False
+            if "quad" in template:
+                quad = scale_quad([tuple(p) for p in template["quad"]], tpl_scale)
+            else:
+                left, top, right, bottom = scale_box(template["box"], tpl_scale)
+                quad = [
+                    (left, top),
+                    (right, top),
+                    (right, bottom),
+                    (left, bottom)
+                ]
+            print_img = prepare_print_image(source_file, trim_pct_local, max_side=print_max_side)
+            saved = (meta.get("mockup_placements") or {}).get(place_key, {})
+            saved_frames = saved.get("frames") or []
+            frame_placement = saved_frames[0] if saved_frames else {}
+            placement = {
+                "pan_x": float(frame_placement.get("pan_x") or 0.0),
+                "pan_y": float(frame_placement.get("pan_y") or 0.0),
+                "zoom": float(frame_placement.get("zoom") or 1.0),
+            }
+            result_img, bounds = composite_warp(
+                print_img, template_img, quad, lighting_ref=lighting_ref,
+                placement=placement, supersample=ss_override,
+            )
+            left_b, top_b, right_b, bottom_b = bounds
+
+        result_img = ensure_listing_resolution(result_img)
+        suffix = out_suffix or ""
+        mockup_out_name = f"mockup_{template['name']}{suffix}.jpg"
+        mockup_out_path = os.path.join(piece_dir, mockup_out_name)
+        jpeg_q = 88 if fast else 95
+        result_img.save(mockup_out_path, "JPEG", quality=jpeg_q, subsampling=0 if not fast else 2)
+        print(f"  Saved mockup -> {mockup_out_path}")
+        if primary_mockup_img is None:
+            primary_mockup_img = result_img
+            primary_box = (left_b, top_b, right_b, bottom_b)
+        generated_count += 1
+        return True
+
+    for template, out_suffix, place_key in jobs:
         if not is_template_calibrated(template):
             print(f"Skipping uncalibrated template {template['name']} (calibrate in Mockup Studio first).")
             continue
         tpl_orient = template.get("orientation") or orientation
         is_multi = bool(template.get("quads"))
-        # PD packs: allow any orientation for multi-frame; single-frame match by art later
         if not is_pd_bundle and not is_multi and tpl_orient != orientation:
             continue
-        if template.get("name") in disabled and not selected:
+        if template.get("name") in disabled and not selected and only_bases is None:
             continue
-            
-        template_img_path = os.path.join(HERE, template["image"])
-        if not os.path.exists(template_img_path):
-            print(f"Warning: Template image {template_img_path} not found. Skipping.")
-            continue
-            
+
         aspect = template.get("aspect")
         source_file = best_composite_source(piece_dir, prints_dir, aspect)
-        # Per-template art override (single-frame pack hero choice)
         overrides = meta.get("single_frame_sources") or {}
         tpl_name_early = template.get("name") or ""
-        if tpl_name_early in overrides:
-            ov = resolve_print_path(piece_dir, overrides[tpl_name_early])
-            if ov:
-                source_file = ov
-        # Or placements with a single frame / single quad
-        saved_one = (meta.get("mockup_placements") or {}).get(tpl_name_early, {})
+        for key_try in (place_key, tpl_name_early):
+            if key_try in overrides:
+                ov = resolve_print_path(piece_dir, overrides[key_try])
+                if ov:
+                    source_file = ov
+                    break
+        saved_one = (meta.get("mockup_placements") or {}).get(place_key) or (meta.get("mockup_placements") or {}).get(tpl_name_early, {})
         saved_frames = saved_one.get("frames") or []
         if not template.get("quads") and saved_frames and saved_frames[0].get("image"):
             ov = resolve_print_path(piece_dir, saved_frames[0]["image"])
@@ -1028,102 +1216,92 @@ def generate_mockups_for_piece(piece_dir, only_templates=None, fast=False):
                 source_file = ov
         if not source_file and pool_paths:
             source_file = pick_pool_image_for_orientation(pool_paths, tpl_orient)
-        if not source_file and "quads" not in template:
-            print(f"Warning: No source image found for template {template['name']}. Skipping.")
-            continue
-            
-        print(f"Compositing onto mockup {template['name']}{' (fast)' if fast else ''}...")
-        
+
         try:
-            with Image.open(template_img_path) as raw_tpl:
-                template_img, tpl_scale = scale_template_for_output(raw_tpl.convert("RGB"))
-            lighting_ref = template_img.copy()
-            
-            # Check if this is a multi-frame / gallery wall template
             if "quads" in template:
-                quads = [scale_quad([tuple(pt) for pt in q], tpl_scale) for q in template["quads"]]
+                quads = template["quads"]
                 frame_count = len(quads)
-                use_region = frame_count >= 4
-                tpl_name = template["name"]
-
-                saved = meta.get("mockup_placements", {}).get(tpl_name, {})
-                saved_frames = saved.get("frames", [])
                 use_pool = pool_paths[:] if pool_paths else gather_run_prints(piece_dir, prints_dir, frame_count)
+                saved = (meta.get("mockup_placements") or {}).get(place_key) or (meta.get("mockup_placements") or {}).get(tpl_name_early, {})
+                saved_frames = saved.get("frames", [])
+                first_paths = []
                 auto_paths = assign_prints_to_quads(use_pool, quads)
-
-                result_img = template_img.copy()
-                for idx, quad in enumerate(quads):
+                for idx in range(frame_count):
                     frame_placement = saved_frames[idx] if idx < len(saved_frames) else {}
                     image_ref = frame_placement.get("image") if frame_placement else None
                     print_path = resolve_print_path(piece_dir, image_ref) if image_ref else None
                     if not print_path:
                         print_path = auto_paths[idx] if idx < len(auto_paths) else (use_pool[0] if use_pool else source_file)
+                    first_paths.append(print_path)
 
-                    print_img = prepare_print_image(print_path, trim_pct, max_side=print_max_side)
-                    placement = normalize_placement(frame_placement)
-                    if use_region:
-                        composite_warp_into(
-                            result_img, print_img, quad, lighting_ref=lighting_ref,
-                            placement=placement, supersample=ss_override,
-                        )
-                    else:
-                        result_img, _ = composite_warp(
-                            print_img, result_img, quad, lighting_ref=lighting_ref,
-                            placement=placement, supersample=ss_override,
-                        )
-                    progress = {
-                        "template": template["name"],
-                        "frame": idx + 1,
-                        "total": frame_count,
-                    }
-                    print(f"__MOCKUP_PROGRESS__{json.dumps(progress)}", flush=True)
-                    print(f"  Frame {idx + 1}/{frame_count} composited", flush=True)
-                    
-                box = scale_box(template["box"], tpl_scale) if template.get("box") else [
-                    0, 0, template_img.size[0], template_img.size[1]
-                ]
-                left_b, top_b, right_b, bottom_b = box
-                
+                label = f"{template['name']}{out_suffix}"
+                print(f"Compositing onto mockup {label}{' (fast)' if fast else ''}...")
+                _composite_one(template, first_paths, out_suffix=out_suffix, placement_key=place_key)
             else:
-                if "quad" in template:
-                    quad = scale_quad([tuple(p) for p in template["quad"]], tpl_scale)
-                else:
-                    left, top, right, bottom = scale_box(template["box"], tpl_scale)
-                    quad = [
-                        (left, top),
-                        (right, top),
-                        (right, bottom),
-                        (left, bottom)
-                    ]
-                print_img = prepare_print_image(source_file, trim_pct, max_side=print_max_side)
-                result_img, bounds = composite_warp(
-                    print_img, template_img, quad, lighting_ref=lighting_ref,
-                    supersample=ss_override,
-                )
-                left_b, top_b, right_b, bottom_b = bounds
+                if not source_file and not pool_paths:
+                    print(f"Warning: No source image found for template {template['name']}. Skipping.")
+                    continue
+                label = f"{template['name']}{out_suffix}"
+                print(f"Compositing onto mockup {label}{' (fast)' if fast else ''}...")
+                primary = source_file or (pool_paths[0] if pool_paths else None)
+                _composite_one(template, [primary], out_suffix=out_suffix, placement_key=place_key)
 
-            result_img = ensure_listing_resolution(result_img)
-                
-            mockup_out_name = f"mockup_{template['name']}.jpg"
-            mockup_out_path = os.path.join(piece_dir, mockup_out_name)
-            jpeg_q = 88 if fast else 95
-            result_img.save(mockup_out_path, "JPEG", quality=jpeg_q, subsampling=0 if not fast else 2)
-            print(f"  Saved mockup -> {mockup_out_path}")
-            
-            if primary_mockup_img is None:
-                primary_mockup_img = result_img
-                primary_box = (left_b, top_b, right_b, bottom_b)
-                
-            generated_count += 1
-            
         except Exception as e:
-            print(f"Error generating mockup for template {template['name']}: {e}")
-            
-    # Zoom GIF is slow — skip on fast single-frame swaps; full regen still respects prefs
+            print(f"Error generating mockup for template {template['name']}{out_suffix}: {e}")
+
     include_zoom = (not fast) and meta.get("mockup_prefs", {}).get("include_zoom_gif", True)
     if primary_mockup_img is not None and primary_box is not None and include_zoom:
         gif_out_path = os.path.join(piece_dir, "mockup_zoom.gif")
         generate_zoom_gif(primary_mockup_img, primary_box[0], primary_box[1], primary_box[2], primary_box[3], gif_out_path)
+
+    overview_written = []
+    if generate_overviews and pool_paths and not fast:
+        try:
+            from generate_overview_grids import generate_bundle_overview_grids
+            print(f"Building overview grids for {len(pool_paths)} artwork(s)…")
+            overview_written = generate_bundle_overview_grids(
+                piece_dir,
+                image_paths=pool_paths,
+                max_sheets=overview_max_sheets,
+            )
+            generated_count += len(overview_written)
+        except Exception as e:
+            print(f"Overview grid generation failed: {e}")
+
+    try:
+        prefs = meta.get("mockup_prefs") or {}
+        existing_order = [str(x) for x in (prefs.get("photo_order") or []) if x]
+        overview_names = [os.path.basename(p) for p in overview_written]
+        room_names = sorted(
+            f for f in os.listdir(piece_dir)
+            if f.lower().startswith("mockup_") and f.lower().endswith(".jpg")
+            and not f.lower().startswith("mockup_overview_")
+        )
+        new_order = []
+        if room_names:
+            new_order.append(room_names[0])
+        if overview_names:
+            for n in overview_names:
+                if n not in new_order:
+                    new_order.append(n)
+        else:
+            for n in existing_order:
+                if n.lower().startswith("mockup_overview_") and n not in new_order and os.path.isfile(os.path.join(piece_dir, n)):
+                    new_order.append(n)
+        for n in room_names[1:]:
+            if n not in new_order:
+                new_order.append(n)
+        for n in existing_order:
+            if n not in new_order and os.path.isfile(os.path.join(piece_dir, n)):
+                new_order.append(n)
+        prefs["photo_order"] = new_order[:10]
+        prefs["generate_overview_grids"] = generate_overviews
+        prefs["repeat_mockups"] = False
+        meta["mockup_prefs"] = prefs
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+    except Exception as e:
+        print(f"photo_order update warning: {e}")
 
     print(f"Mockup generation complete for {os.path.basename(piece_dir)}. Generated {generated_count} mockups.")
     summary = {
@@ -1131,6 +1309,8 @@ def generate_mockups_for_piece(piece_dir, only_templates=None, fast=False):
         "generated": generated_count,
         "warnings": quality_warnings,
         "fast": bool(fast),
+        "overview_grids": len(overview_written),
+        "repeat_mockups": False,
     }
     summary_path = os.path.join(piece_dir, "mockup_summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
@@ -1138,11 +1318,12 @@ def generate_mockups_for_piece(piece_dir, only_templates=None, fast=False):
     print("__MOCKUP_RESULT__" + json.dumps(summary))
     return generated_count > 0
 
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python generate_mockups.py <piece_directory_path> [--only name1,name2]")
+        print("Usage: python generate_mockups.py <piece_directory_path> [--only name1,name2] [--overview-only]")
         sys.exit(1)
-        
+
     piece_path = sys.argv[1]
     if not os.path.isabs(piece_path):
         piece_path = os.path.abspath(piece_path)
@@ -1151,6 +1332,7 @@ if __name__ == "__main__":
         idx = sys.argv.index("--only")
         if idx + 1 < len(sys.argv):
             only = [x.strip() for x in sys.argv[idx + 1].split(",") if x.strip()]
-        
-    ok = generate_mockups_for_piece(piece_path, only_templates=only)
+    overview_only = "--overview-only" in sys.argv
+
+    ok = generate_mockups_for_piece(piece_path, only_templates=only, overview_only=overview_only)
     sys.exit(0 if ok else 1)

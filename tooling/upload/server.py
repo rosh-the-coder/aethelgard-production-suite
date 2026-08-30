@@ -23,18 +23,142 @@ PYTHON_EXE = os.path.join(ROOT_DIR, "tooling", "ad-creatives", ".venv", "Scripts
 AUTH_STATE_PATH = os.path.join(HERE, "auth_state.json")
 ENV_FILE_PATH = os.path.expanduser("~/.config/ai-images/env")
 JOBS_DIR = os.path.join(HERE, ".jobs")
+SUITE_SETTINGS_PATH = os.path.join(HERE, "suite_settings.json")
 MOCKUP_JOBS = {}
 MOCKUP_JOBS_LOCK = threading.Lock()
 LATEST_SHOP_CAPTURE = None
 LATEST_SHOP_CAPTURE_LOCK = threading.Lock()
 LATEST_LISTING_CAPTURE = None
 LATEST_LISTING_CAPTURE_LOCK = threading.Lock()
+SHOP_WATERMARK_TEXT = "Aethelgard Art Co."
+
+DEFAULT_SUITE_SETTINGS = {
+    "prices": {
+        "single": 2.99,
+        "graphic_poster": 2.99,
+        "pd_bundle": 7.99,
+        "bundle": 12.99,
+    },
+    "default_quantity": 999,
+    "thank_you_note": "",
+    "batch": {
+        "concurrency": 1,
+        "dry_run_default": True,
+    },
+    "email": {
+        "enabled": False,
+        "host": "",
+        "port": 587,
+        "username": "",
+        "sender": "",
+        "recipient": "",
+        "tls_mode": "starttls",
+    },
+    "drive": {
+        "root_folder_id": "1owjKwkil2H-7jli52jbkIhexxXclhkQk",
+        "auto_package_on_batch": False,
+    },
+}
+
+
+def load_suite_settings():
+    settings = json.loads(json.dumps(DEFAULT_SUITE_SETTINGS))
+    if os.path.isfile(SUITE_SETTINGS_PATH):
+        try:
+            with open(SUITE_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                disk = json.load(f)
+            if isinstance(disk.get("prices"), dict):
+                settings["prices"].update({k: float(v) for k, v in disk["prices"].items() if v is not None})
+            if disk.get("default_quantity") is not None:
+                settings["default_quantity"] = int(disk["default_quantity"])
+            if disk.get("thank_you_note") is not None:
+                settings["thank_you_note"] = str(disk["thank_you_note"])
+            if isinstance(disk.get("batch"), dict):
+                settings["batch"].update(disk["batch"])
+            if isinstance(disk.get("email"), dict):
+                # never persist password fields from disk even if present
+                email = {k: v for k, v in disk["email"].items() if "password" not in str(k).lower()}
+                settings["email"].update(email)
+            if isinstance(disk.get("drive"), dict):
+                settings["drive"].update({k: v for k, v in disk["drive"].items() if v is not None})
+        except Exception as e:
+            print(f"Warning: could not read suite_settings.json: {e}")
+    return settings
+
+
+def save_suite_settings(data):
+    current = load_suite_settings()
+    prices = data.get("prices") or {}
+    for key in ("single", "graphic_poster", "pd_bundle", "bundle"):
+        if key in prices and prices[key] is not None:
+            current["prices"][key] = float(prices[key])
+    if data.get("default_quantity") is not None:
+        current["default_quantity"] = int(data["default_quantity"])
+    if "thank_you_note" in data:
+        current["thank_you_note"] = str(data.get("thank_you_note") or "")
+    if isinstance(data.get("batch"), dict):
+        batch = data["batch"]
+        if batch.get("concurrency") is not None:
+            current["batch"]["concurrency"] = max(1, min(4, int(batch["concurrency"])))
+        if "dry_run_default" in batch:
+            current["batch"]["dry_run_default"] = bool(batch["dry_run_default"])
+    if isinstance(data.get("email"), dict):
+        email = data["email"]
+        for key in ("enabled", "host", "username", "sender", "recipient", "tls_mode"):
+            if key in email:
+                current["email"][key] = email[key] if key != "enabled" else bool(email[key])
+        if email.get("port") is not None:
+            current["email"]["port"] = int(email["port"])
+    if isinstance(data.get("drive"), dict):
+        drive = data["drive"]
+        if drive.get("root_folder_id") is not None:
+            current["drive"]["root_folder_id"] = str(drive["root_folder_id"]).strip()
+        if "auto_package_on_batch" in drive:
+            current["drive"]["auto_package_on_batch"] = bool(drive["auto_package_on_batch"])
+    with open(SUITE_SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(current, f, indent=2)
+    return current
+
+
+def price_for_product_type(product_type=None, product_kind=None):
+    settings = load_suite_settings()
+    prices = settings.get("prices") or {}
+    kind = (product_kind or product_type or "single") or "single"
+    kind = str(kind).lower()
+    if kind in ("pd_bundle",):
+        key = "pd_bundle"
+    elif kind in ("bundle",):
+        key = "bundle"
+    elif kind in ("graphic_poster",):
+        key = "graphic_poster"
+    else:
+        key = "single"
+    try:
+        return f"{float(prices.get(key, prices.get('single', 2.99))):.2f}"
+    except (TypeError, ValueError):
+        return "2.99"
+
+
+def ensure_piece_master_watermark(piece_dir, force=False):
+    """Build master_wm.jpg for catalog / listing preview. Returns rel path from ROOT_DIR or None."""
+    try:
+        from shop_watermark import ensure_master_watermarked
+        abs_path = ensure_master_watermarked(
+            piece_dir, text=SHOP_WATERMARK_TEXT, opacity=0.18, force=force,
+        )
+        if not abs_path or not os.path.isfile(abs_path):
+            return None
+        return os.path.relpath(abs_path, ROOT_DIR).replace("\\", "/")
+    except Exception as e:
+        print(f"ensure_piece_master_watermark: {e}")
+        return None
 
 
 def playwright_env():
     env = os.environ.copy()
     browsers = os.path.join(ROOT_DIR, "tooling", "ad-creatives", ".playwright-browsers")
-    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", browsers)
+    # Always force suite browsers — do not inherit a broken/empty system cache.
+    env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
     return env
@@ -62,20 +186,30 @@ def load_env_keys_into_os():
     if not os.path.isfile(ENV_FILE_PATH):
         return
     try:
-        with open(ENV_FILE_PATH, "r", encoding="utf-8-sig") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("export "):
-                    line = line[7:]
-                if "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                k = k.strip()
-                v = v.strip().strip("'\"")
-                if k:
-                    os.environ[k] = v
+        raw = None
+        for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+            try:
+                with open(ENV_FILE_PATH, "r", encoding=enc) as f:
+                    raw = f.read()
+                break
+            except UnicodeDecodeError:
+                continue
+        if raw is None:
+            with open(ENV_FILE_PATH, "r", encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip("'\"")
+            if k:
+                os.environ[k] = v
         # google-genai prefers GOOGLE_API_KEY; keep GEMINI Studio key authoritative.
         google = (os.environ.get("GOOGLE_API_KEY") or "").strip()
         gemini = (os.environ.get("GEMINI_API_KEY") or "").strip()
@@ -185,6 +319,7 @@ def build_preflight():
         "gemini_key_set": gemini_ok,
         "openrouter_key_set": env_key_present("OPENROUTER_API_KEY"),
         "openai_key_set": env_key_present("OPENAI_API_KEY"),
+        "groq_key_set": env_key_present("GROQ_API_KEY"),
         "cloudflare_worker_key_set": cf_key,
         "cloudflare_worker_url_set": cf_url,
         "cloudflare_ready": cloudflare_ok,
@@ -231,13 +366,14 @@ def parse_mockup_stdout(stdout, piece_dir, success):
     return generated, warnings, success
 
 
-def start_mockup_job(piece_dir, only_templates=None):
+def start_mockup_job(piece_dir, only_templates=None, overview_only=False):
     job_id = uuid.uuid4().hex[:10]
     initial = {
         "status": "running",
         "piece_dir": piece_dir,
         "started_at": time.time(),
         "only_templates": list(only_templates or []),
+        "overview_only": bool(overview_only),
     }
     with MOCKUP_JOBS_LOCK:
         MOCKUP_JOBS[job_id] = initial
@@ -249,7 +385,9 @@ def start_mockup_job(piece_dir, only_templates=None):
 
     def worker():
         cmd = [PYTHON_EXE, MOCKUPS_SCRIPT, piece_dir]
-        if only_templates:
+        if overview_only:
+            cmd += ["--overview-only"]
+        elif only_templates:
             cmd += ["--only", ",".join(only_templates)]
         stdout_lines = []
         try:
@@ -288,6 +426,7 @@ def start_mockup_job(piece_dir, only_templates=None):
             "warnings": warnings,
             "piece_dir": piece_dir,
             "finished_at": time.time(),
+            "overview_only": bool(overview_only),
         }
         with MOCKUP_JOBS_LOCK:
             MOCKUP_JOBS[job_id] = done
@@ -318,15 +457,108 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = self.api_path()
+
+        # Factory OS APIs (dashboard aggregate, SSE, batches, templates, quota)
+        if path.startswith("/api/") or path.startswith("/api"):
+            try:
+                from factory import factory_routes
+                research_count = None
+                try:
+                    from research_library import list_items
+                    research_count = len(list_items() or [])
+                except Exception:
+                    research_count = None
+                if factory_routes.handle_get(
+                    self,
+                    path,
+                    scan_runs=self.scan_runs,
+                    build_preflight=build_preflight,
+                    load_suite_settings=load_suite_settings,
+                    research_count=research_count,
+                ):
+                    return
+            except Exception as e:
+                if path in ("/api/dashboard", "/api/events", "/api/quota", "/api/batches") or path.startswith(
+                    "/api/templates/"
+                ) or path.startswith("/api/batches/"):
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                    return
+
+            if path.startswith("/api/archive"):
+                try:
+                    from archive import routes as archive_routes
+                    if archive_routes.handle_get(self, path):
+                        return
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                    return
+
+        if path == "/factory_ui.js":
+            asset = os.path.join(HERE, "factory_ui.js")
+            if os.path.isfile(asset):
+                self.send_response(200)
+                self.send_header("Content-type", "application/javascript; charset=utf-8")
+                self.end_headers()
+                with open(asset, "rb") as f:
+                    self.wfile.write(f.read())
+                return
+
+        if path == "/archive_studio.css":
+            asset = os.path.join(HERE, "archive_studio.css")
+            if os.path.isfile(asset):
+                self.send_response(200)
+                self.send_header("Content-type", "text/css; charset=utf-8")
+                self.end_headers()
+                with open(asset, "rb") as f:
+                    self.wfile.write(f.read())
+                return
+        if path == "/archive_studio.js":
+            asset = os.path.join(HERE, "archive_studio.js")
+            if os.path.isfile(asset):
+                self.send_response(200)
+                self.send_header("Content-type", "application/javascript; charset=utf-8")
+                self.end_headers()
+                with open(asset, "rb") as f:
+                    self.wfile.write(f.read())
+                return
+
         # Route dashboard home
         if path == "/" or path == "/index.html":
-            self.send_response(200)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
             dashboard_path = os.path.join(HERE, "dashboard.html")
+            self.send_response(200)
+            self.send_header("Content-type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.end_headers()
             with open(dashboard_path, "rb") as f:
                 self.wfile.write(f.read())
             return
+
+        # Factory dashboard static assets
+        if path == "/factory_dashboard.css":
+            asset = os.path.join(HERE, "factory_dashboard.css")
+            if os.path.isfile(asset):
+                self.send_response(200)
+                self.send_header("Content-type", "text/css; charset=utf-8")
+                self.end_headers()
+                with open(asset, "rb") as f:
+                    self.wfile.write(f.read())
+                return
+        if path == "/factory_dashboard.js":
+            asset = os.path.join(HERE, "factory_dashboard.js")
+            if os.path.isfile(asset):
+                self.send_response(200)
+                self.send_header("Content-type", "application/javascript; charset=utf-8")
+                self.end_headers()
+                with open(asset, "rb") as f:
+                    self.wfile.write(f.read())
+                return
             
         # Mockup helper tool route
         if path == "/mockup_helper" or path == "/mockup_helper.html":
@@ -342,13 +574,113 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if path == "/api/auth_status":
             auth_path = AUTH_STATE_PATH
             exists = os.path.isfile(auth_path)
+            api_info = {}
+            try:
+                from etsy_api import api_status
+                api_info = api_status()
+            except Exception as e:
+                api_info = {"error": str(e)}
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({
                 "authenticated": exists,
                 "auth_file": auth_path if exists else None,
+                "etsy_api": api_info,
             }).encode('utf-8'))
+            return
+
+        # API: Etsy Open API connection status
+        if path == "/api/etsy/api_status":
+            try:
+                from etsy_api import api_status
+                payload = api_status()
+                self.send_response(200)
+            except Exception as e:
+                payload = {"error": str(e)}
+                self.send_response(500)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            return
+
+        # API: OAuth callback from Etsy (browser redirect)
+        if path == "/api/etsy/oauth/callback":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            code = (qs.get("code") or [None])[0]
+            state = (qs.get("state") or [None])[0]
+            err = (qs.get("error") or [None])[0]
+            html_ok = """<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;background:#111;color:#eee">
+            <h1>Etsy API connected</h1><p>You can close this tab and return to the Production Suite.</p>
+            <script>setTimeout(()=>window.close(), 1500)</script></body></html>"""
+            html_bad = """<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;background:#111;color:#f88">
+            <h1>Etsy API connect failed</h1><p>{}</p></body></html>"""
+            if err or not code or not state:
+                self.send_response(400)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(html_bad.format(err or "Missing code/state").encode("utf-8"))
+                return
+            try:
+                from etsy_api import finish_oauth
+                finish_oauth(code, state)
+                self.send_response(200)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(html_ok.encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(html_bad.format(str(e)).encode("utf-8"))
+            return
+
+        # API: Google Drive OAuth callback
+        if path == "/api/drive/oauth/callback":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            code = (qs.get("code") or [None])[0]
+            state = (qs.get("state") or [None])[0]
+            err = (qs.get("error") or [None])[0]
+            html_ok = """<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;background:#111;color:#eee">
+            <h1>Google Drive connected</h1><p>You can close this tab and return to the Production Suite.</p>
+            <script>setTimeout(()=>window.close(), 1500)</script></body></html>"""
+            html_bad = """<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;background:#111;color:#f88">
+            <h1>Google Drive connect failed</h1><p>{}</p></body></html>"""
+            if err or not code:
+                self.send_response(400)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(html_bad.format(err or "Missing code").encode("utf-8"))
+                return
+            try:
+                import drive_delivery
+                drive_delivery.finish_oauth(code, state or "")
+                self.send_response(200)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(html_ok.encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(html_bad.format(str(e)).encode("utf-8"))
+            return
+
+        if path == "/api/drive/status":
+            try:
+                import drive_delivery
+                payload = {"success": True, **drive_delivery.status()}
+                settings = load_suite_settings()
+                payload["root_folder_id"] = (settings.get("drive") or {}).get(
+                    "root_folder_id"
+                ) or payload.get("root_folder_id")
+                self.send_response(200)
+            except Exception as e:
+                payload = {"success": False, "error": str(e)}
+                self.send_response(500)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
             return
 
         # API: Operator preflight (booleans only — never returns key material)
@@ -469,6 +801,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     self.wfile.write(f.read())
             else:
                 self.wfile.write(json.dumps({}).encode('utf-8'))
+            return
+
+        if path == "/api/suite_settings":
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True, "settings": load_suite_settings()}).encode("utf-8"))
             return
 
         # API: Mockup template registry (for Mockup Studio library tab)
@@ -612,6 +951,35 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(payload or {"waiting": True}).encode("utf-8"))
             return
 
+        # API: Public-domain image proxy (loc.gov is Cloudflare-blocked in-browser)
+        if path == "/api/public_domain/image":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                from public_domain import resolve_pd_image_bytes
+                data, mime = resolve_pd_image_bytes(
+                    (qs.get("set") or [""])[0],
+                    (qs.get("file") or [""])[0],
+                    (qs.get("u") or [""])[0],
+                )
+                if not data:
+                    self.send_response(404)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "Image not available"}).encode("utf-8"))
+                    return
+                self.send_response(200)
+                self.send_header("Content-type", mime or "image/jpeg")
+                self.send_header("Cache-Control", "public, max-age=120")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+            return
+
         # API: Public-domain Met search
         if path == "/api/public_domain/search":
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -619,6 +987,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             limit = (qs.get("limit") or ["48"])[0]
             offset = (qs.get("offset") or ["0"])[0]
             try:
+                import importlib
+                import public_domain as _pd_mod
+                importlib.reload(_pd_mod)
                 from public_domain import search_met
                 results, meta = search_met(q, limit=limit, offset=offset, return_meta=True)
                 self.send_response(200)
@@ -634,7 +1005,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     "offset": meta.get("offset", 0),
                     "has_more": bool(meta.get("has_more")),
                     "total_ranked": meta.get("total_ranked", len(results)),
-                    "note": meta.get("note") or "Met Open Access only — verify before commercial use.",
+                    "note": meta.get("note") or "Met, Library of Congress, and Wikimedia — verify before commercial use.",
                 }).encode("utf-8"))
             except Exception as e:
                 self.send_response(500)
@@ -671,6 +1042,50 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             content_length = int(self.headers.get("Content-Length") or 0)
             post_data = self.rfile.read(content_length)
             content_type = (self.headers.get("Content-Type") or "").lower()
+
+            # Factory OS POST APIs (batches, rebuild, email test, draft resubmit)
+            if path.startswith("/api/batches") or path in (
+                "/api/jobs/resume-selection",
+                "/api/products/rebuild",
+                "/api/products/etsy-draft",
+                "/api/settings/email/test",
+            ):
+                try:
+                    data = json.loads(post_data.decode("utf-8") or "{}")
+                except Exception:
+                    data = {}
+                try:
+                    from factory import factory_routes
+                    if factory_routes.handle_post(
+                        self,
+                        path,
+                        data,
+                        load_suite_settings=load_suite_settings,
+                        save_suite_settings=save_suite_settings,
+                    ):
+                        return
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                    return
+
+            if path.startswith("/api/archive"):
+                try:
+                    data = json.loads(post_data.decode("utf-8") or "{}")
+                except Exception:
+                    data = {}
+                try:
+                    from archive import routes as archive_routes
+                    if archive_routes.handle_post(self, path, data):
+                        return
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                    return
 
             # Form POST from bookmarklet (bypasses Chrome fetch block from HTTPS → localhost)
             if path in ("/api/import_listing_capture_form", "/api/import_shop_capture_form"):
@@ -744,6 +1159,37 @@ a{{color:#c5a880}}</style></head><body>
                     self.wfile.write(err_html.encode("utf-8"))
                     return
 
+            # Artwork Studio — existing-file upload (multipart; not JSON)
+            if path == "/api/studio_upload" or path.startswith("/api/studio_upload/"):
+                try:
+                    from studio_upload import handle_studio_upload
+                    json_data = None
+                    if "multipart/form-data" not in content_type:
+                        try:
+                            json_data = json.loads(post_data.decode("utf-8") or "{}")
+                        except Exception:
+                            json_data = {}
+                    status, payload = handle_studio_upload(
+                        content_type=self.headers.get("Content-Type") or "",
+                        body=post_data,
+                        runs_dir=RUNS_DIR,
+                        root_dir=ROOT_DIR,
+                        title_fn=lambda concept, spine: self.get_ai_title_suggestions(concept, spine),
+                        gemini_key=self.get_gemini_key(),
+                        json_data=json_data,
+                        path=path,
+                    )
+                    self.send_response(status)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(payload).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
             try:
                 data = json.loads(post_data.decode("utf-8") or "{}")
             except json.JSONDecodeError as je:
@@ -761,12 +1207,98 @@ a{{color:#c5a880}}</style></head><body>
                 tags = data.get("tags", [])
                 price = data.get("price")
                 quantity = data.get("quantity")
+                materials = data.get("materials", None)
                 
-                success = self.save_metadata(piece_dir, title, description, tags, price, quantity)
+                success = self.save_metadata(piece_dir, title, description, tags, price, quantity, materials=materials)
                 self.send_response(200 if success else 500)
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": success}).encode('utf-8'))
+                return
+
+            if path == "/api/suite_settings":
+                try:
+                    settings = save_suite_settings(data)
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": True, "settings": settings}).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
+            if path == "/api/generate_seo_pack":
+                piece_dir = data.get("piece_dir")
+                if not piece_dir or not os.path.isdir(piece_dir):
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "Invalid piece_dir"}).encode("utf-8"))
+                    return
+                try:
+                    from seo_pack import apply_seo_pack_to_piece, generate_seo_pack_for_piece
+                    pack = generate_seo_pack_for_piece(piece_dir)
+                    apply_seo_pack_to_piece(piece_dir, pack)
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": True, "pack": pack}).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
+            if path == "/api/suggest_bundles":
+                piece_dirs = data.get("piece_dirs") or []
+                try:
+                    artworks = []
+                    for pdir in piece_dirs:
+                        meta_path = os.path.join(pdir, "meta.json")
+                        if not os.path.isfile(meta_path):
+                            continue
+                        with open(meta_path, "r", encoding="utf-8") as f:
+                            meta = json.load(f)
+                        artworks.append({
+                            "title": meta.get("title") or meta.get("slug") or os.path.basename(pdir),
+                            "prompt": meta.get("prompt") or "",
+                            "path": pdir,
+                        })
+                    from seo_pack import suggest_bundle_options
+                    options = suggest_bundle_options(artworks)
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": True, "options": options}).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
+            if path == "/api/create_library_bundle":
+                try:
+                    result = self.create_library_bundle(
+                        data.get("piece_dirs") or [],
+                        title=data.get("title") or "Art Bundle",
+                        concept=data.get("concept") or "",
+                        auto_seo=bool(data.get("auto_seo", True)),
+                    )
+                    code = 200 if result.get("success") else 400
+                    self.send_response(code)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
                 return
 
             # API: Generate mockups (async — compositing can take 1–2 min)
@@ -797,16 +1329,33 @@ a{{color:#c5a880}}</style></head><body>
                             pass
                     selected_set = set(selected_templates)
                     disabled = [n for n in all_names if n not in selected_set]
+                    extra = {}
+                    for key in (
+                        "repeat_mockups",
+                        "generate_overview_grids",
+                        "overview_max_sheets",
+                        "max_room_mockups",
+                    ):
+                        if key in data:
+                            extra[key] = data[key]
                     self.save_mockup_prefs(
                         piece_dir, disabled, include_zoom_gif=False,
                         selected_templates=list(selected_templates),
+                        extra_prefs=extra or None,
                     )
                     only_templates = list(selected_templates)
                 elif selected_templates and not only_templates:
                     # Backward compatible: treat templates as this-job-only filter
                     only_templates = list(selected_templates)
 
-                job_id = start_mockup_job(piece_dir, only_templates=only_templates)
+                overview_only = bool(data.get("overview_only"))
+                if overview_only:
+                    only_templates = None
+                job_id = start_mockup_job(
+                    piece_dir,
+                    only_templates=only_templates,
+                    overview_only=overview_only,
+                )
                 templates_path = os.path.join(ROOT_DIR, "tooling", "mockups", "templates.json")
                 calibrated_count = 0
                 needs_cal_count = 0
@@ -906,6 +1455,9 @@ a{{color:#c5a880}}</style></head><body>
                     master_path = os.path.join(piece_dir, "master.png")
                     if os.path.isfile(master_path):
                         master_rel = os.path.relpath(master_path, ROOT_DIR).replace("\\", "/")
+                    master_preview = ensure_piece_master_watermark(piece_dir, force=True)
+                else:
+                    master_preview = None
                 self.send_response(200 if success else 500)
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
@@ -914,9 +1466,52 @@ a{{color:#c5a880}}</style></head><body>
                     "error": err,
                     "mockup_rel": mockup_rel,
                     "master_rel": master_rel,
+                    "master_preview": master_preview,
                     "template": template_name,
                     "elapsed_ms": elapsed_ms,
                 }).encode("utf-8"))
+                return
+
+            # API: Delete a listing mockup (room or overview)
+            if path == "/api/delete_mockup":
+                piece_dir = data.get("piece_dir")
+                source = data.get("source") or data.get("fname") or data.get("mockup")
+                if not piece_dir or not os.path.isdir(piece_dir) or not source:
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "success": False,
+                        "error": "Need piece_dir and source mockup filename",
+                    }).encode("utf-8"))
+                    return
+                result = self.delete_mockup(piece_dir, source)
+                ok = bool(result.get("success"))
+                self.send_response(200 if ok else 500)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode("utf-8"))
+                return
+
+            # API: Duplicate an existing room mockup so you can Change art on the copy
+            if path == "/api/duplicate_mockup":
+                piece_dir = data.get("piece_dir")
+                source = data.get("source") or data.get("fname") or data.get("mockup")
+                if not piece_dir or not os.path.isdir(piece_dir) or not source:
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "success": False,
+                        "error": "Need piece_dir and source mockup filename",
+                    }).encode("utf-8"))
+                    return
+                result = self.duplicate_mockup(piece_dir, source)
+                ok = bool(result.get("success"))
+                self.send_response(200 if ok else 500)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode("utf-8"))
                 return
 
             # API: Generate PDF
@@ -972,7 +1567,7 @@ a{{color:#c5a880}}</style></head><body>
                 }).encode('utf-8'))
                 return
 
-            # API: Trigger Etsy Upload
+            # API: Trigger Etsy Upload (browser automation — fragile / bot-wall prone)
             if path == "/api/upload":
                 piece_dir = data.get("piece_dir")
                 success = False
@@ -981,9 +1576,19 @@ a{{color:#c5a880}}</style></head><body>
                     error = "Invalid piece_dir"
                 else:
                     try:
+                        if not os.path.isfile(PYTHON_EXE):
+                            raise FileNotFoundError(f"Python not found: {PYTHON_EXE}")
+                        if not os.path.isfile(UPLOAD_SCRIPT):
+                            raise FileNotFoundError(f"Upload script not found: {UPLOAD_SCRIPT}")
                         write_upload_status(piece_dir, "queued", "Upload console launching…")
-                        cmd = f'start cmd /k "{PYTHON_EXE} {UPLOAD_SCRIPT} --upload \\"{piece_dir}\\""'
-                        subprocess.Popen(cmd, shell=True)
+                        # List argv + new console — never shell-join paths (spaces in "Etsy 2026" break cmd).
+                        creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+                        subprocess.Popen(
+                            [PYTHON_EXE, UPLOAD_SCRIPT, "--upload", os.path.abspath(piece_dir)],
+                            cwd=HERE,
+                            env=playwright_env(),
+                            creationflags=creationflags,
+                        )
                         success = True
                         print(f"Launched Etsy upload in new console window for: {piece_dir}")
                     except Exception as e:
@@ -1000,6 +1605,102 @@ a{{color:#c5a880}}</style></head><body>
                     "message": "Upload console started — watch status badge; success only after draft saves." if success else error,
                     "error": error,
                 }).encode('utf-8'))
+                return
+
+            # API: Begin Etsy Open API OAuth (PKCE)
+            if path == "/api/etsy/oauth/start":
+                try:
+                    from etsy_api import begin_oauth
+                    payload = begin_oauth()
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": True, **payload}).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
+            # API: Begin Google Drive OAuth
+            if path == "/api/drive/oauth/start":
+                try:
+                    import drive_delivery
+                    payload = drive_delivery.begin_oauth()
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": True, **payload}).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
+            # API: Package listing to Drive (customer folder + private mockups) and compile PDF
+            if path == "/api/drive/package":
+                piece_dir = data.get("piece_dir")
+                if not piece_dir or not os.path.isdir(piece_dir):
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "Invalid piece_dir"}).encode("utf-8"))
+                    return
+                try:
+                    import drive_delivery
+                    settings = load_suite_settings()
+                    root_id = (data.get("root_folder_id")
+                               or (settings.get("drive") or {}).get("root_folder_id")
+                               or drive_delivery.DEFAULT_ROOT_FOLDER_ID)
+                    result = drive_delivery.package_piece_to_drive(
+                        piece_dir,
+                        root_folder_id=root_id,
+                        compile_pdf=data.get("compile_pdf", True) is not False,
+                        pdf_script=PDF_SCRIPT,
+                        python_exe=PYTHON_EXE,
+                    )
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode("utf-8"))
+                except Exception as e:
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
+            # API: Create draft via Etsy Open API (preferred — no Seller Manager bot wall)
+            if path == "/api/upload_api":
+                piece_dir = data.get("piece_dir")
+                if not piece_dir or not os.path.isdir(piece_dir):
+                    self.send_response(400)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": "Invalid piece_dir"}).encode("utf-8"))
+                    return
+                try:
+                    from etsy_api import create_draft_from_piece
+                    write_upload_status(piece_dir, "running", "Creating draft via Etsy Open API…")
+                    result = create_draft_from_piece(piece_dir)
+                    write_upload_status(
+                        piece_dir,
+                        "succeeded",
+                        f"API draft created (listing {result.get('listing_id')})",
+                        draft_url=result.get("draft_url"),
+                    )
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode("utf-8"))
+                except Exception as e:
+                    write_upload_status(piece_dir, "failed", str(e))
+                    self.send_response(500)
+                    self.send_header("Content-type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
                 return
 
             # API: Import shop capture from browser bookmarklet / paste
@@ -1217,6 +1918,9 @@ a{{color:#c5a880}}</style></head><body>
                     self.wfile.write(json.dumps({"success": False, "error": "Select at least one artwork."}).encode("utf-8"))
                     return
                 try:
+                    import importlib
+                    import public_domain as _pd_mod
+                    importlib.reload(_pd_mod)
                     from public_domain import import_objects_to_run
                     run_dir, candidates, errors, manifest = import_objects_to_run(
                         objects, RUNS_DIR, concept=concept, trim_borders=True
@@ -1405,7 +2109,8 @@ a{{color:#c5a880}}</style></head><body>
                 layout = data.get("layout") or "hero_stack"
                 paper_tint = data.get("paper_tint", True)
                 accent_circle = bool(data.get("accent_circle"))
-                pad_subject = float(data.get("pad_subject") or (0.08 if layout == "museum" else 0))
+                # Explicit pad only — never auto-inset museum layouts (fake mats in frames)
+                pad_subject = float(data.get("pad_subject") or 0)
                 base_b64 = data.get("base_png_b64") or data.get("base_image_b64")
                 if base_b64 and base_path:
                     try:
@@ -1535,6 +2240,12 @@ a{{color:#c5a880}}</style></head><body>
                         selected_templates=selected_templates,
                         trim_borders=True,
                     )
+                elif mode in ("ai_bundle", "bundle", "theme_bundle") or data.get("product_type") == "bundle":
+                    result = self.finalize_ai_bundle(
+                        run_dir, keepers,
+                        pack_title=pack_title,
+                        trim_margin=trim_margin,
+                    )
                 else:
                     result = self.finalize_selected_keepers(run_dir, keepers, trim_margin)
                 status = 200 if result.get("any_success") else 500
@@ -1629,7 +2340,22 @@ a{{color:#c5a880}}</style></head><body>
                 disabled = data.get("disabled_mockups", [])
                 include_zoom = data.get("include_zoom_gif", True)
                 selected = data.get("selected_templates", None)
-                success = self.save_mockup_prefs(piece_dir, disabled, include_zoom, selected_templates=selected)
+                photo_order = data.get("photo_order", None)
+                extra = {}
+                for key in (
+                    "repeat_mockups",
+                    "generate_overview_grids",
+                    "overview_max_sheets",
+                    "max_room_mockups",
+                ):
+                    if key in data:
+                        extra[key] = data[key]
+                success = self.save_mockup_prefs(
+                    piece_dir, disabled, include_zoom,
+                    selected_templates=selected,
+                    photo_order=photo_order,
+                    extra_prefs=extra or None,
+                )
                 self.send_response(200 if success else 500)
                 self.send_header("Content-type", "application/json")
                 self.end_headers()
@@ -1671,6 +2397,14 @@ a{{color:#c5a880}}</style></head><body>
                                 os.rmdir(parent)
                             except OSError:
                                 pass
+                    try:
+                        from factory import events
+                        from factory.audit import audit
+                        audit("product.deleted", piece_dir=piece_dir)
+                        events.publish("product.deleted", {"piece_dir": piece_dir})
+                        events.invalidate("product.deleted")
+                    except Exception:
+                        pass
                     self.send_response(200)
                     self.send_header("Content-type", "application/json")
                     self.end_headers()
@@ -1737,7 +2471,11 @@ a{{color:#c5a880}}</style></head><body>
         lower = filename.lower()
         if not lower.startswith("mockup_") or not lower.endswith((".jpg", ".jpeg")):
             return None
-        return filename[7:lower.rfind(".")]
+        stem = filename[7:lower.rfind(".")]
+        # Repeat variants: mockup_{template}_r01.jpg → template name
+        if len(stem) > 4 and stem[-4] == "_" and stem[-3].lower() == "r" and stem[-2:].isdigit():
+            stem = stem[:-4]
+        return stem
 
     def scan_runs(self):
         runs = []
@@ -1764,6 +2502,10 @@ a{{color:#c5a880}}</style></head><body>
                 try:
                     with open(meta_path, "r", encoding="utf-8") as f:
                         meta = json.load(f)
+
+                    # Bundle member pieces are assembled into one listing piece — hide the parts.
+                    if meta.get("exclude_from_catalog") or meta.get("batch_role") == "bundle_member":
+                        continue
                     
                     listing_path = os.path.join(piece_path, "listing.json")
                     listing = {}
@@ -1771,12 +2513,15 @@ a{{color:#c5a880}}</style></head><body>
                         with open(listing_path, "r", encoding="utf-8") as f:
                             listing = json.load(f)
                             
-                    # Get list of mockups — only from calibrated templates
+                    # Get list of mockups — calibrated templates + overview grids + _rNN repeats
                     calibrated_names = self.get_calibrated_template_names()
                     all_mockup_files = sorted([
                         f for f in os.listdir(piece_path)
                         if f.lower().startswith("mockup_") and f.lower().endswith(".jpg")
-                        and self.mockup_stem_from_filename(f) in calibrated_names
+                        and (
+                            f.lower().startswith("mockup_overview_")
+                            or self.mockup_stem_from_filename(f) in calibrated_names
+                        )
                     ])
                     mockup_prefs = meta.get("mockup_prefs", {})
                     disabled = set(mockup_prefs.get("disabled_mockups", []))
@@ -1797,6 +2542,7 @@ a{{color:#c5a880}}</style></head><body>
                     
                     # Get relative paths for images to render on dashboard
                     rel_master = os.path.relpath(os.path.join(piece_path, "master.png"), ROOT_DIR).replace("\\", "/")
+                    rel_master_preview = ensure_piece_master_watermark(piece_path) or rel_master
                     rel_mockups = [os.path.relpath(os.path.join(piece_path, m), ROOT_DIR).replace("\\", "/") for m in mockups]
                     rel_all_mockups = [os.path.relpath(os.path.join(piece_path, m), ROOT_DIR).replace("\\", "/") for m in all_mockup_files]
                     
@@ -1831,6 +2577,7 @@ a{{color:#c5a880}}</style></head><body>
                         "slug": meta.get("slug"),
                         "path": piece_path,
                         "product_type": meta.get("product_type") or "print",
+                        "product_kind": meta.get("product_kind"),
                         "bundle_count": meta.get("bundle_count"),
                         "orientation": meta.get("orientation"),
                         "aspect": meta.get("aspect") or (meta.get("typography") or {}).get("aspect"),
@@ -1842,7 +2589,9 @@ a{{color:#c5a880}}</style></head><body>
                         "seo_title": listing.get("title", meta.get("seo", {}).get("title", "")),
                         "seo_tags": listing.get("tags", meta.get("seo", {}).get("tags", [])),
                         "seo_description": listing.get("description", meta.get("seo", {}).get("description", "")),
+                        "seo_materials": listing.get("materials", meta.get("seo", {}).get("materials", [])),
                         "master_image": rel_master,
+                        "master_preview": rel_master_preview,
                         "mockups": rel_mockups,
                         "all_mockups": rel_all_mockups,
                         "mockup_prefs": mockup_prefs,
@@ -1861,6 +2610,11 @@ a{{color:#c5a880}}</style></head><body>
                         "run_name": run_name,
                         "text_layers": meta.get("text_layers") or (meta.get("typography") or {}).get("layers") or [],
                         "typography": self._typography_catalog_payload(piece_path, meta),
+                        "stale_artifacts": meta.get("stale_artifacts") or [],
+                        "stale_reason": meta.get("stale_reason"),
+                        "batch_id": meta.get("batch_id"),
+                        "listing_id": meta.get("listing_id"),
+                        "dry_run": bool(meta.get("dry_run")),
                     })
                 except Exception as e:
                     print(f"Error reading piece {piece_name}: {e}")
@@ -2090,8 +2844,17 @@ a{{color:#c5a880}}</style></head><body>
 
         aspect = data.get("aspect") or typo.get("aspect") or meta.get("aspect") or "4:5"
         layout = data.get("layout") or typo.get("layout") or "hero_stack"
-        pad_subject = float(data.get("pad_subject") or (0.08 if layout == "museum" else 0))
+        pad_subject = float(data.get("pad_subject") or 0)
         master_path = os.path.join(piece_dir, "master.png")
+
+        long_edge = 4800
+        if os.path.isfile(master_path):
+            try:
+                from PIL import Image as _PilImage
+                with _PilImage.open(master_path) as _im:
+                    long_edge = max(4800, max(_im.size))
+            except Exception:
+                pass
 
         from poster_compose import compose_from_layers
         png_bytes = compose_from_layers(
@@ -2100,7 +2863,7 @@ a{{color:#c5a880}}</style></head><body>
             aspect=aspect,
             paper_tint=True,
             accent_circle=False,
-            long_edge=2000,
+            long_edge=long_edge,
             pad_subject=pad_subject,
         )
         with open(master_path, "wb") as f:
@@ -2149,11 +2912,12 @@ a{{color:#c5a880}}</style></head><body>
         return {
             "success": True,
             "master_rel": os.path.relpath(master_path, ROOT_DIR).replace("\\", "/"),
+            "master_preview": ensure_piece_master_watermark(piece_dir, force=True),
             "layers": layers,
             "prints_refreshed": prints_refreshed,
         }
 
-    def save_metadata(self, piece_dir, title, description, tags, price, quantity):
+    def save_metadata(self, piece_dir, title, description, tags, price, quantity, materials=None):
         meta_path = os.path.join(piece_dir, "meta.json")
         listing_path = os.path.join(piece_dir, "listing.json")
         
@@ -2173,17 +2937,23 @@ a{{color:#c5a880}}</style></head><body>
             meta["seo"]["title"] = title
             meta["seo"]["description"] = description
             meta["seo"]["tags"] = tags
+            if materials is not None:
+                cleaned = [str(m).strip()[:45] for m in materials if str(m).strip()][:13]
+                meta["seo"]["materials"] = cleaned
             
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
                 
             # Update listing.json / seo.md
+            listing_payload = {
+                "title": title,
+                "tags": tags,
+                "description": description
+            }
+            if materials is not None:
+                listing_payload["materials"] = meta["seo"].get("materials", [])
             with open(listing_path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "title": title,
-                    "tags": tags,
-                    "description": description
-                }, f, indent=2)
+                json.dump(listing_payload, f, indent=2)
                 
             seo_md_path = os.path.join(piece_dir, "seo.md")
             with open(seo_md_path, "w", encoding="utf-8") as f:
@@ -2192,6 +2962,11 @@ a{{color:#c5a880}}</style></head><body>
                 f.write("**Tags**:\n")
                 for t in tags:
                     f.write(f"- {t}\n")
+                mats = meta.get("seo", {}).get("materials") or []
+                if mats:
+                    f.write("\n**Materials**:\n")
+                    for m in mats:
+                        f.write(f"- {m}\n")
                 f.write(f"\n**Description:**\n\n{description}\n")
                 
             return True
@@ -2431,8 +3206,11 @@ a{{color:#c5a880}}</style></head><body>
                 "prompt": clean_win_text(k.get("prompt", "")),
                 "upscale": 4,
                 "upscale_mode": "lanczos",
-                "price": "5.99",
-                "quantity": "999",
+                "price": price_for_product_type(
+                    product_kind or "print",
+                    product_kind=product_kind or ("graphic_poster" if typography else None),
+                ),
+                "quantity": str(load_suite_settings().get("default_quantity", 999)),
                 "trim_margin": trim_margin,
                 "seo": {
                     "title": f"{title} - Printable Wall Art, Vintage Digital Print Decor",
@@ -2523,6 +3301,86 @@ a{{color:#c5a880}}</style></head><body>
             "finalized_count": sum(1 for r in results if r.get("success")),
             "total": len(results),
             "results": results,
+        }
+
+    def _mark_bundle_members(self, piece_dirs):
+        """Hide member singles from Catalog listings (they live under the set)."""
+        for pdir in piece_dirs or []:
+            pdir = (pdir or "").replace("/", os.sep)
+            meta_path = os.path.join(pdir, "meta.json")
+            if not os.path.isfile(meta_path):
+                continue
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                meta["exclude_from_catalog"] = True
+                meta["batch_role"] = "bundle_member"
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(meta, f, indent=2)
+            except Exception as e:
+                print(f"mark bundle member failed for {pdir}: {e}")
+
+    def finalize_ai_bundle(self, run_dir, keepers, pack_title="", trim_margin=0):
+        """
+        Finalize each AI keeper as a member print, then compose ONE set listing
+        (product_type=bundle) — same Catalog shape as library / batch sets.
+        """
+        if len(keepers or []) < 2:
+            return self.finalize_selected_keepers(run_dir, keepers, trim_margin)
+
+        singles = self.finalize_selected_keepers(run_dir, keepers, trim_margin)
+        piece_dirs = [
+            r["piece_dir"]
+            for r in (singles.get("results") or [])
+            if r.get("success") and r.get("piece_dir")
+        ]
+        if len(piece_dirs) < 2:
+            return singles
+
+        self._mark_bundle_members(piece_dirs)
+        title = clean_win_text(
+            pack_title
+            or (keepers[0].get("title") if keepers else None)
+            or f"Set of {len(piece_dirs)} Prints"
+        )
+        concept = clean_win_text(
+            (keepers[0].get("prompt") if keepers else "") or f"Theme set: {title}"
+        )
+        bundle = self.create_library_bundle(
+            piece_dirs,
+            title=title,
+            concept=concept,
+            auto_seo=True,
+            mark_members=False,  # already marked
+        )
+        if not bundle.get("success"):
+            return {
+                "success": False,
+                "any_success": True,
+                "finalized_count": len(piece_dirs),
+                "total": len(keepers),
+                "results": singles.get("results") or [],
+                "error": bundle.get("error") or "Bundle assemble failed after finals",
+            }
+
+        member_results = singles.get("results") or []
+        return {
+            "success": True,
+            "any_success": True,
+            "finalized_count": 1,
+            "total": 1,
+            "bundle_count": bundle.get("bundle_count") or len(piece_dirs),
+            "piece_dir": bundle.get("piece_dir"),
+            "product_type": "bundle",
+            "needs_mockup_picker": True,
+            "results": member_results + [{
+                "title": title,
+                "label": "set listing",
+                "success": True,
+                "piece_dir": bundle.get("piece_dir"),
+            }],
+            "seo_pack": bundle.get("seo_pack"),
+            "member_piece_dirs": piece_dirs,
         }
 
     def finalize_pd_bundle(self, run_dir, keepers, pack_title="", selected_templates=None, trim_borders=True):
@@ -2653,8 +3511,8 @@ a{{color:#c5a880}}</style></head><body>
             "model": "public-domain-met",
             "prompt": f"Public domain pack: {title}",
             "upscale": 0,
-            "price": "12.99",
-            "quantity": "999",
+            "price": price_for_product_type("pd_bundle"),
+            "quantity": str(load_suite_settings().get("default_quantity", 999)),
             "trim_margin": 0,
             "seo": {
                 "title": f"{title} — {len(copied)} Vintage Digital Prints Bundle, Gallery Wall Set",
@@ -2704,6 +3562,135 @@ a{{color:#c5a880}}</style></head><body>
                 "piece_dir": piece_dir.replace("\\", "/"),
                 "product_type": "pd_bundle",
             }],
+        }
+
+    def create_library_bundle(self, piece_dirs, title="Art Bundle", concept="", auto_seo=True, mark_members=True):
+        """Compose a theme bundle from existing catalog piece masters."""
+        import shutil
+        from PIL import Image
+
+        paths = []
+        for p in piece_dirs or []:
+            p = (p or "").replace("/", os.sep)
+            if p and os.path.isdir(p) and os.path.isfile(os.path.join(p, "master.png")):
+                paths.append(os.path.abspath(p))
+        if len(paths) < 2:
+            return {"success": False, "error": "Need at least 2 valid artwork pieces with master.png"}
+
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        slug_base = re.sub(r"[^a-z0-9]+", "-", (title or "bundle").lower()).strip("-")[:40] or "bundle"
+        run_name = f"library_bundle_{stamp}_{slug_base}"
+        run_dir = os.path.join(RUNS_DIR, run_name)
+        piece_slug = f"{slug_base}_bundle"
+        piece_dir = os.path.join(run_dir, piece_slug)
+        bundle_dir = os.path.join(piece_dir, "bundle")
+        os.makedirs(bundle_dir, exist_ok=True)
+
+        copied = []
+        orientations = {"portrait": 0, "landscape": 0, "square": 0}
+        for i, src_piece in enumerate(paths, 1):
+            src_master = os.path.join(src_piece, "master.png")
+            dest_name = f"{i:02d}_{os.path.basename(src_piece)}.png"
+            dest = os.path.join(bundle_dir, dest_name)
+            shutil.copy2(src_master, dest)
+            orient = "portrait"
+            try:
+                with Image.open(dest) as im:
+                    w, h = im.size
+                    if abs(w - h) < max(w, h) * 0.05:
+                        orient = "square"
+                    elif w > h:
+                        orient = "landscape"
+                orientations[orient] = orientations.get(orient, 0) + 1
+            except Exception:
+                orientations["portrait"] += 1
+            copied.append({
+                "path": dest.replace("\\", "/"),
+                "source": src_piece.replace("\\", "/"),
+                "orientation": orient,
+            })
+
+        master_path = os.path.join(piece_dir, "master.png")
+        shutil.copy2(copied[0]["path"].replace("/", os.sep), master_path)
+        ensure_piece_master_watermark(piece_dir, force=True)
+
+        dominant = max(orientations, key=orientations.get) if any(orientations.values()) else "portrait"
+        settings = load_suite_settings()
+        description = (
+            (f"{concept.strip()}\n\n" if concept else "")
+            + f"Digital download pack with {len(copied)} high-resolution art prints from Aethelgard Art Co. "
+            + "Delivery via PDF guide + Google Drive folder. Personal use."
+        )
+        piece_meta = {
+            "run_dir": run_dir.replace("\\", "/"),
+            "title": title,
+            "slug": piece_slug,
+            "source_image": master_path.replace("\\", "/"),
+            "product_type": "bundle",
+            "bundle_dir": bundle_dir.replace("\\", "/"),
+            "bundle_count": len(copied),
+            "bundle_orientations": orientations,
+            "bundle_sources": [c["source"] for c in copied],
+            "orientation": dominant,
+            "sizes": "native",
+            "model": "library-bundle",
+            "prompt": concept or f"Theme bundle: {title}",
+            "upscale": 0,
+            "price": price_for_product_type("bundle"),
+            "quantity": str(settings.get("default_quantity", 999)),
+            "seo": {
+                "title": f"{title} — {len(copied)} Printable Wall Art Bundle",
+                "tags": ["printable wall art", "digital art print", "gallery wall set", "art print bundle"],
+                "description": description,
+                "materials": ["Digital download", "PDF", "Printable wall art"],
+            },
+            "mockup_prefs": {
+                "disabled_mockups": [],
+                "selected_templates": [],
+                "include_zoom_gif": False,
+            },
+            "skip_print_crops": True,
+        }
+        with open(os.path.join(piece_dir, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump(piece_meta, f, indent=2)
+        with open(os.path.join(piece_dir, "listing.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "title": piece_meta["seo"]["title"],
+                "tags": piece_meta["seo"]["tags"],
+                "description": description,
+                "materials": piece_meta["seo"]["materials"],
+            }, f, indent=2)
+        with open(os.path.join(piece_dir, "bundle_manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "product_type": "bundle",
+                "title": title,
+                "count": len(copied),
+                "files": copied,
+                "concept": concept,
+            }, f, indent=2, ensure_ascii=False)
+
+        if mark_members:
+            self._mark_bundle_members(paths)
+
+        artwork_script = os.path.join(ROOT_DIR, ".claude", "skills", "artwork-orchestrator", "scripts", "artwork.py")
+        if os.path.isfile(artwork_script) and os.path.isfile(PYTHON_EXE):
+            self.run_subprocess([PYTHON_EXE, artwork_script, "index", run_dir])
+
+        seo_pack = None
+        if auto_seo:
+            try:
+                from seo_pack import apply_seo_pack_to_piece, generate_seo_pack_for_piece
+                seo_pack = generate_seo_pack_for_piece(piece_dir)
+                apply_seo_pack_to_piece(piece_dir, seo_pack)
+            except Exception as e:
+                print(f"Library bundle SEO skipped: {e}")
+
+        return {
+            "success": True,
+            "piece_dir": piece_dir.replace("\\", "/"),
+            "bundle_count": len(copied),
+            "needs_mockup_picker": True,
+            "seo_pack": seo_pack,
         }
 
     def pd_bundle_autoplace(self, piece_dir, template_names):
@@ -2889,7 +3876,15 @@ a{{color:#c5a880}}</style></head><body>
             print(f"Error deleting mockup template: {e}")
             return False
 
-    def save_mockup_prefs(self, piece_dir, disabled_mockups, include_zoom_gif=True, selected_templates=None):
+    def save_mockup_prefs(
+        self,
+        piece_dir,
+        disabled_mockups,
+        include_zoom_gif=True,
+        selected_templates=None,
+        photo_order=None,
+        extra_prefs=None,
+    ):
         meta_path = os.path.join(piece_dir, "meta.json")
         if not os.path.exists(meta_path):
             return False
@@ -2901,6 +3896,13 @@ a{{color:#c5a880}}</style></head><body>
             prefs["include_zoom_gif"] = bool(include_zoom_gif)
             if selected_templates is not None:
                 prefs["selected_templates"] = list(selected_templates)
+            if photo_order is not None:
+                prefs["photo_order"] = [str(x) for x in photo_order if x]
+            if isinstance(extra_prefs, dict):
+                for k, v in extra_prefs.items():
+                    if v is None:
+                        continue
+                    prefs[k] = v
             meta["mockup_prefs"] = prefs
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
@@ -2943,6 +3945,126 @@ a{{color:#c5a880}}</style></head><body>
             print(f"Error saving mockup placements: {e}")
             return False
 
+
+
+    def delete_mockup(self, piece_dir, source):
+        """Remove a mockup jpg and clean photo_order / placements / single_frame_sources."""
+        src_name = os.path.basename(str(source)).replace('\\', '/')
+        if not src_name.lower().startswith('mockup_'):
+            if not src_name.lower().endswith(('.jpg', '.jpeg')):
+                src_name = f"mockup_{src_name}.jpg"
+        if src_name.lower() in ('master_wm.jpg', 'master_wm.jpeg'):
+            return {"success": False, "error": "Use the checkbox to exclude the watermark — it is not a mockup file."}
+        src_path = os.path.join(piece_dir, src_name)
+        if not os.path.isfile(src_path):
+            return {"success": False, "error": f"Mockup not found: {src_name}"}
+        try:
+            os.remove(src_path)
+        except OSError as e:
+            return {"success": False, "error": str(e)}
+        stem = src_name[7:src_name.lower().rfind('.')]
+        meta_path = os.path.join(piece_dir, 'meta.json')
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            placements = meta.get('mockup_placements') or {}
+            placements.pop(stem, None)
+            meta['mockup_placements'] = placements
+            sources = meta.get('single_frame_sources') or {}
+            sources.pop(stem, None)
+            meta['single_frame_sources'] = sources
+            prefs = meta.get('mockup_prefs') or {}
+            order = [str(x) for x in (prefs.get('photo_order') or []) if x and x != src_name]
+            prefs['photo_order'] = order
+            disabled = [d for d in (prefs.get('disabled_mockups') or []) if d != src_name]
+            prefs['disabled_mockups'] = disabled
+            meta['mockup_prefs'] = prefs
+            with open(meta_path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, indent=2)
+        except Exception as e:
+            return {"success": False, "error": f"Deleted file but failed meta cleanup: {e}", "fname": src_name}
+        return {"success": True, "fname": src_name, "photo_order": prefs.get('photo_order') or []}
+
+    def duplicate_mockup(self, piece_dir, source):
+        """Copy a room mockup to mockup_{base}_rNN.jpg and clone placements/art sources."""
+        from shutil import copy2
+        src_name = os.path.basename(str(source)).replace('\\', '/')
+        if src_name.lower().startswith('mockup_overview_'):
+            return {"success": False, "error": "Overview grids cannot be duplicated — regenerate them instead."}
+        if not src_name.lower().startswith('mockup_') or not src_name.lower().endswith(('.jpg', '.jpeg')):
+            # allow bare stem
+            if not src_name.lower().endswith(('.jpg', '.jpeg')):
+                src_name = f"mockup_{src_name}.jpg"
+        src_path = os.path.join(piece_dir, src_name)
+        if not os.path.isfile(src_path):
+            return {"success": False, "error": f"Mockup not found: {src_name}"}
+        stem = src_name[7:src_name.lower().rfind('.')]
+        # Resolve base template (strip existing _rNN)
+        m = re.match(r'^(.*)_r(\d{2})$', stem, flags=re.IGNORECASE)
+        base = m.group(1) if m else stem
+        used = set()
+        for f in os.listdir(piece_dir):
+            low = f.lower()
+            if not (low.startswith('mockup_') and low.endswith(('.jpg', '.jpeg'))):
+                continue
+            s = f[7:low.rfind('.')]
+            mm = re.match(r'^' + re.escape(base) + r'_r(\d{2})$', s, flags=re.IGNORECASE)
+            if mm:
+                used.add(int(mm.group(1)))
+        n = 1
+        while n in used:
+            n += 1
+            if n > 99:
+                return {"success": False, "error": "Too many duplicates for this mockup"}
+        new_stem = f"{base}_r{n:02d}"
+        new_name = f"mockup_{new_stem}.jpg"
+        new_path = os.path.join(piece_dir, new_name)
+        try:
+            copy2(src_path, new_path)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        meta_path = os.path.join(piece_dir, 'meta.json')
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            placements = meta.get('mockup_placements') or {}
+            sources = meta.get('single_frame_sources') or {}
+            # Prefer exact source stem placements, else base
+            src_pl = placements.get(stem) or placements.get(base)
+            if src_pl:
+                import copy as _copy
+                placements[new_stem] = _copy.deepcopy(src_pl)
+                meta['mockup_placements'] = placements
+            src_art = sources.get(stem) or sources.get(base)
+            if src_art:
+                sources[new_stem] = src_art
+                meta['single_frame_sources'] = sources
+            prefs = meta.get('mockup_prefs') or {}
+            order = [str(x) for x in (prefs.get('photo_order') or []) if x]
+            if new_name not in order:
+                # Insert after source if present, else append
+                if src_name in order:
+                    i = order.index(src_name)
+                    order.insert(i + 1, new_name)
+                else:
+                    order.append(new_name)
+            prefs['photo_order'] = order[:10]
+            prefs['repeat_mockups'] = False
+            meta['mockup_prefs'] = prefs
+            with open(meta_path, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, indent=2)
+        except Exception as e:
+            return {"success": False, "error": f"Copied file but failed meta update: {e}", "fname": new_name}
+        rel = os.path.relpath(new_path, ROOT_DIR).replace('\\', '/')
+        return {
+            "success": True,
+            "fname": new_name,
+            "stem": new_stem,
+            "base": base,
+            "mockup_rel": rel,
+            "photo_order": prefs.get('photo_order') or [],
+        }
+
     def save_single_frame_source(self, piece_dir, template_name, image_ref, set_as_cover=False):
         """Remember which pack image fills a single-frame mockup; optionally update master.png."""
         meta_path = os.path.join(piece_dir, "meta.json")
@@ -2981,6 +4103,7 @@ a{{color:#c5a880}}</style></head><body>
                 except Exception:
                     copy2(resolved, dest)
                 meta["cover_image"] = store_ref
+                ensure_piece_master_watermark(piece_dir, force=True)
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
             return True, None
@@ -2989,11 +4112,26 @@ a{{color:#c5a880}}</style></head><body>
             return False, str(e)
 
 def start_server(port=8080):
+    try:
+        from factory.factory_routes import boot_factory
+        boot_factory(load_suite_settings)
+        print("Factory OS: job worker + SQLite store ready", flush=True)
+    except Exception as e:
+        print(f"Warning: factory boot failed: {e}", flush=True)
+    try:
+        from archive.routes import boot_archive
+        boot_archive()
+        print("Archive Studio: job worker + SQLite store ready", flush=True)
+    except Exception as e:
+        print(f"Warning: archive boot failed: {e}", flush=True)
     server = ThreadingHTTPServer(('127.0.0.1', port), DashboardHandler)
-    print(f"\n" + "="*60)
-    print(f"Etsy Automated Pipeline Dashboard running at http://127.0.0.1:{port}")
-    print("Press Ctrl+C to stop the server.")
-    print("="*60 + "\n")
+    print("", flush=True)
+    print("=" * 60, flush=True)
+    print(f"Etsy Automated Pipeline Dashboard running at http://127.0.0.1:{port}", flush=True)
+    print("Factory Dashboard is the live operational control centre.", flush=True)
+    print("Press Ctrl+C to stop the server.", flush=True)
+    print("=" * 60, flush=True)
+    print("", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

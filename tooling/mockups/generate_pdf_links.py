@@ -2,6 +2,12 @@ import os
 import sys
 import json
 import asyncio
+
+# Pin browsers to the suite cache before Playwright imports resolve paths.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_BROWSERS = os.path.abspath(os.path.join(_HERE, "..", "ad-creatives", ".playwright-browsers"))
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = _BROWSERS
+
 from playwright.async_api import async_playwright
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -36,11 +42,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }}
         .shop-name {{
             font-family: 'Outfit', sans-serif;
-            font-size: 1.25rem;
+            font-size: 1.15rem;
             font-weight: 600;
-            letter-spacing: 0.1em;
+            letter-spacing: 0.12em;
             text-transform: uppercase;
-            color: #6366f1;
+            color: #3d4a3f;
             margin-bottom: 25px;
         }}
         h1 {{
@@ -54,7 +60,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .divider {{
             height: 2px;
             width: 60px;
-            background-color: #6366f1;
+            background-color: #8b7355;
             margin: 20px auto 25px auto;
         }}
         p {{
@@ -65,7 +71,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }}
         .btn {{
             display: inline-block;
-            background-color: #111827;
+            background-color: #1f2937;
             color: #ffffff !important;
             text-decoration: none;
             padding: 16px 32px;
@@ -77,7 +83,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             box-shadow: 0 4px 12px rgba(17, 24, 39, 0.15);
         }}
         .btn:hover {{
-            background-color: #1f2937;
+            background-color: #111827;
         }}
         .instructions {{
             text-align: left;
@@ -114,11 +120,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
     <div class="container">
-        <div class="shop-name">Digital Art Collective</div>
+        <div class="shop-name">Aethelgard Art Co.</div>
         <h1>Your Art is Ready!</h1>
         <div class="divider"></div>
         <p>
-            Thank you so much for your purchase! Click the button below to access your high-resolution 300 DPI print files for <strong>{title}</strong>.
+            Thank you for supporting Aethelgard Art Co.! Click the button below to access your high-resolution 300 DPI print files for <strong>{title}</strong>.
         </p>
         
         <a href="{drive_link}" class="btn" target="_blank">Download Art Files</a>
@@ -133,7 +139,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
         
         <div class="footer">
-            Need help? Contact us via Etsy messages!
+            Need help? Message Aethelgard Art Co. on Etsy.
         </div>
     </div>
 </body>
@@ -143,75 +149,101 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 async def generate_pdf(title, drive_link, output_pdf_path):
     """
     Generate PDF with links using Playwright.
+    Uses set_content (not file://) so long Windows paths still work.
+    Writes via a short temp path first — Acrobat/Etsy choke on 260+ char paths.
     """
+    import tempfile
+    import shutil
+
     html_content = HTML_TEMPLATE.format(title=title, drive_link=drive_link)
-    
-    # Save temp HTML file
-    temp_html_path = output_pdf_path + ".temp.html"
-    with open(temp_html_path, "w", encoding="utf-8") as f:
-        f.write(html_content)
-        
+    out_abs = os.path.abspath(output_pdf_path)
+    os.makedirs(os.path.dirname(out_abs), exist_ok=True)
+
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch()
-            page = await browser.new_page()
-            
-            # Open local temp html file
-            abs_url = "file://" + os.path.abspath(temp_html_path).replace("\\", "/")
-            await page.goto(abs_url)
-            
-            # Wait for fonts to load
-            await page.evaluate("document.fonts.ready")
-            
-            # Print to PDF
-            # A4 size, margins
-            await page.pdf(
-                path=output_pdf_path,
-                format="A4",
-                print_background=True,
-                margin={"top": "0mm", "bottom": "0mm", "left": "0mm", "right": "0mm"}
-            )
-            await browser.close()
-            
+        with tempfile.TemporaryDirectory(prefix="aethelgard_pdf_") as tmp:
+            tmp_pdf = os.path.join(tmp, "Download_Links.pdf")
+            async with async_playwright() as p:
+                browser = await p.chromium.launch()
+                page = await browser.new_page()
+                await page.set_content(html_content, wait_until="load")
+                try:
+                    await page.evaluate("document.fonts.ready")
+                except Exception:
+                    pass
+                await page.pdf(
+                    path=tmp_pdf,
+                    format="A4",
+                    print_background=True,
+                    margin={"top": "0mm", "bottom": "0mm", "left": "0mm", "right": "0mm"}
+                )
+                await browser.close()
+
+            # Extended-length path copy for deep artwork-runs folders on Windows
+            dest = out_abs
+            if os.name == "nt" and not dest.startswith("\\\\?\\"):
+                dest = "\\\\?\\" + dest
+            src = tmp_pdf
+            if os.name == "nt" and not src.startswith("\\\\?\\"):
+                src = "\\\\?\\" + os.path.abspath(tmp_pdf)
+            shutil.copy2(src, dest)
+
         print(f"Generated PDF download links -> {output_pdf_path}")
         return True
     except Exception as e:
         print(f"Error generating PDF: {e}")
         return False
-    finally:
-        # Cleanup temp HTML file
-        if os.path.exists(temp_html_path):
-            os.remove(temp_html_path)
+
 
 def main():
     if len(sys.argv) < 3:
         print("Usage: python generate_pdf_links.py <piece_directory_path> <google_drive_folder_link>")
         sys.exit(1)
-        
+
     piece_dir = sys.argv[1]
     drive_link = sys.argv[2]
-    
+
     meta_path = os.path.join(piece_dir, "meta.json")
     if not os.path.exists(meta_path):
         print(f"Error: meta.json not found in {piece_dir}")
         sys.exit(1)
-        
+
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
-        
+
     title = meta.get("title", "Digital Art Print")
-    output_pdf = os.path.join(piece_dir, f"Download_Links_{meta.get('slug', 'art')}.pdf")
-    
+    # Short fixed name — long slug filenames blow past Windows MAX_PATH / Acrobat.
+    output_pdf = os.path.join(piece_dir, "Download_Links.pdf")
+
+    # Also keep a short-path copy for easy opening during dry-runs.
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    delivery_dir = os.path.join(root, "_delivery")
+    os.makedirs(delivery_dir, exist_ok=True)
+    slug = (meta.get("slug") or "art").replace(" ", "-")[:40]
+    short_pdf = os.path.join(delivery_dir, f"{slug}-Download_Links.pdf")
+
     ok = asyncio.run(generate_pdf(title, drive_link, output_pdf))
     if ok:
+        try:
+            import shutil
+            shutil.copy2(output_pdf, short_pdf)
+        except Exception as e:
+            print(f"Warning: could not write short delivery copy: {e}")
+            short_pdf = None
         meta["pdf_path"] = output_pdf.replace("\\", "/")
+        if short_pdf:
+            meta["pdf_path_short"] = short_pdf.replace("\\", "/")
         meta["drive_link"] = drive_link
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
-        print("__PDF_RESULT__" + json.dumps({"success": True, "pdf_path": meta["pdf_path"]}))
+        print("__PDF_RESULT__" + json.dumps({
+            "success": True,
+            "pdf_path": meta["pdf_path"],
+            "pdf_path_short": meta.get("pdf_path_short"),
+        }))
         sys.exit(0)
     print("__PDF_RESULT__" + json.dumps({"success": False}))
     sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

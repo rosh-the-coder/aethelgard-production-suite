@@ -4,3 +4,4 @@ google-genai>=1.0.0     # Google AI Studio / Nano Banana (Gemini image models)
 openai>=1.0.0           # OpenAI GPT Image (optional provider)
 requests>=2.31.0        # OpenRouter HTTP calls
 Pillow>=10.0.0          # crop / resize to print sizes (artwork.py)
+openpyxl>=3.1.0         # Batch Production XLSX templates / parsing

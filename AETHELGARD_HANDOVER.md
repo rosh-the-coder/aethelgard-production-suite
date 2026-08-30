@@ -3,9 +3,8 @@
 **Primary codebase:** `f:\Apps\Etsy 2026\roshwillberich`  
 **Brand / UI label:** Aethelgard Art Co. — Production Suite **v1.2**  
 **Upstream base:** Alek’s Artwork Orchestrator Claude skill (`Aleks/artwork-orchestrator`)  
-**Evidence date:** 18 Jul 2026 (baseline); **progress refresh:** 25 Jul 2026  
-**GitHub:** https://github.com/rosh-the-coder/aethelgard-production-suite  
-**Operator roadmap:** see [`LAUNCH_PROGRESS.md`](./LAUNCH_PROGRESS.md)
+**Evidence date:** 18 Jul 2026  
+**Git history:** None present in workspace (no `.git` at root or project folders)
 
 ---
 
@@ -23,7 +22,7 @@
 
 **Still human:** Niche/concept choice, winner selection, title/tag/description review, Google Drive link for PDF delivery, Etsy login, selector-failure rescue during upload, and **all live publishing** (tool never auto-publishes).
 
-**Completion level:** End-to-end **pipeline validated in testing** (research → generate → finalize → catalog). Three generator modes (AI / Public Domain / Graphic Poster). Draft upload automation exists but is **unproven live** (**0** `uploaded_at`). PDF→Drive delivery **built but unused** (**0** download PDFs). Shop launch not evidenced. Launch sequence tracked in `LAUNCH_PROGRESS.md`.
+**Completion level:** End-to-end **pipeline validated in testing** (research → generate → finalize → catalog). Draft upload automation exists but is fragile. **0 pieces** in `artwork-runs` currently have `uploaded_at`. Shop launch not evidenced.
 
 ---
 
@@ -449,7 +448,7 @@ Hardcoded listing attributes when automation succeeds: Who made = “I did”; W
 | Upload feedback gap | API returns success when console **starts**, not when draft saves |
 | Research integrity | Mock data when blocked — must not be treated as live analytics |
 | Backup | Filesystem folders only |
-| Tech debt | Selector fragility; thin calibrated mockup library; no tests; settings not fully persisted |
+| Tech debt | Selector fragility; thin calibrated mockup library; no tests; no git; settings not fully persisted |
 
 ---
 
@@ -471,7 +470,7 @@ You did **not** invent the entire image finalize skill from scratch. You **adopt
 
 # 16. Development process
 
-*(Baseline reconstructed from docs/code — git now at `aethelgard-production-suite`.)*
+*(Reconstructed from docs, code comments, folder dates, and Aleks package—**no git history**.)*
 
 1. **Upstream:** Alek Artwork Orchestrator skill — concept → generate → upscale → crop → SEO files (Claude Code skill).
 2. **Fork / Windows port:** `setup.ps1`, Playwright install, path/`utf-8-sig` env loading.
@@ -480,8 +479,7 @@ You did **not** invent the entire image finalize skill from scratch. You **adopt
 5. **Research layer:** Keyword/shop scrapers → blocked by DataDome → bookmarklets + mock estimates (“EverBee-style Phase 1”).
 6. **Upload:** Playwright draft automation with manual rescue; Chrome CDP login to reduce bot flags.
 7. **Delivery workaround:** Drive-link PDF for digital files.
-8. **Product modes (post Jul 18):** Public Domain Met import + Graphic Poster composer; reliability pass (preflight, upload status, estimate labeling).
-9. **Current:** Pipeline in active testing; shop not live; upload/PDF end-to-end not evidenced; launch sequence in `LAUNCH_PROGRESS.md`.
+8. **Current:** Pipeline in active testing; shop not live; upload end-to-end not evidenced by `uploaded_at` in runs.
 
 ---
 
@@ -533,19 +531,17 @@ Do not claim live GMV or published listing counts until Shop Manager evidence ex
 | Area | State |
 |---|---|
 | Local dashboard + generate + finalize + mockups | **Stable enough for testing** |
-| Generator modes (AI / Public Domain / Graphic Poster) | **Working** (added since Jul 18 baseline) |
 | Niche presets + catalog editing | **Working** |
-| Playwright draft upload | **Built; not proven on a live draft** |
-| Keyword/shop research live data | **Fragile / often estimated** (UI now labels estimates) |
+| Playwright draft upload | **Functional but fragile** |
+| Keyword/shop research live data | **Fragile / often estimated** |
 | Listing analyzer | **Phase 1 partial** |
 | PDF Drive delivery | **Implemented, unused in current runs** |
-| Preflight + upload status polling | **Improved** |
 | Etsy Open API | **Not connected** |
-| Auto Drive upload | **Not built** |
-| Auto-publish / scheduling / multi-user | **Not built** (draft-only by design until canary) |
+| Auto-publish / scheduling / multi-user | **Not built** |
+| Higgsfield module hook | **Dead code path** |
 | Shop live launch | **Not yet** |
 
-**Recommended next priorities (25 Jul 2026):** Follow [`LAUNCH_PROGRESS.md`](./LAUNCH_PROGRESS.md) in order — (1) one manual dry-run PDF→Etsy draft, (2) shop shell + policies, (3) Aethelgard PDF branding polish, (4) rights honesty per product type, (5) publish listing #1 canary, (6) then automate Drive + harden upload. Defer more styles / mockup library expansion / big UI redesign until #1–#5 are done.
+**Recommended next priorities:** (1) harden upload selectors + completion webhook to dashboard, (2) calibrate more empty-frame templates, (3) exercise PDF→draft path end-to-end, (4) add git + secrets hygiene for `auth_state.json`, (5) consider official Etsy API if scaling beyond personal use, (6) replace mock research with transparent “estimate mode” UI labeling.
 
 ---
 

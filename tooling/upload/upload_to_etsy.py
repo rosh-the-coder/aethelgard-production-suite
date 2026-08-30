@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import asyncio
 import datetime
 import etsy_scrape_utils  # noqa: F401 — sets PLAYWRIGHT_BROWSERS_PATH
@@ -196,11 +197,38 @@ async def upload_listing(piece_dir):
 
     prefs = meta.get("mockup_prefs", {})
     disabled = set(prefs.get("disabled_mockups", []))
-    mockups = [
-        os.path.join(piece_dir, f)
+    photo_order = [str(x) for x in (prefs.get("photo_order") or []) if x]
+    mockup_names = [
+        f
         for f in os.listdir(piece_dir)
         if f.lower().startswith("mockup_") and f.lower().endswith(".jpg") and f not in disabled
     ]
+    # Watermarked flat art — keep on listing but never as cover when other photos exist
+    wm = os.path.join(piece_dir, "master_wm.jpg")
+    if not os.path.isfile(wm):
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from shop_watermark import ensure_master_watermarked
+            ensure_master_watermarked(piece_dir, text="Aethelgard Art Co.", opacity=0.18)
+        except Exception as e:
+            print(f"Watermark preview for upload skipped: {e}")
+    wm_name = "master_wm.jpg" if os.path.isfile(wm) and "master_wm.jpg" not in disabled else None
+
+    by_name = {f: os.path.join(piece_dir, f) for f in mockup_names}
+    if wm_name:
+        by_name[wm_name] = os.path.join(piece_dir, wm_name)
+    ordered_names = []
+    for name in photo_order:
+        if name in by_name and name not in ordered_names:
+            ordered_names.append(name)
+    for f in sorted(mockup_names):
+        if f not in ordered_names:
+            ordered_names.append(f)
+    if wm_name and wm_name not in ordered_names:
+        ordered_names.append(wm_name)
+    if len(ordered_names) > 1 and ordered_names[0] in ("master_wm.jpg", "master_wm.jpeg"):
+        ordered_names = ordered_names[1:] + [ordered_names[0]]
+    mockups = [by_name[n] for n in ordered_names if n in by_name]
 
     digital_files = []
     pdf_files = [os.path.join(piece_dir, f) for f in os.listdir(piece_dir) if f.lower().endswith(".pdf")]
@@ -227,20 +255,124 @@ async def upload_listing(piece_dir):
 
     write_status(piece_dir, "running", f"Uploading draft for: {title}")
     print(f"Uploading listing for: {title}...")
+    chrome_proc = None
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=False)
-            context = await browser.new_context(storage_state=AUTH_STATE_PATH)
-            page = await context.new_page()
+        # Use real Chrome over CDP (same as --login). Bundled Chromium trips Etsy bot walls.
+        print("Starting real Google Chrome for upload (not Playwright Chromium)...")
+        chrome_proc, err = launch_chrome_for_login()
+        if err:
+            write_status(piece_dir, "failed", err)
+            print(f"[ERROR] {err}")
+            return False
+        if not wait_for_cdp():
+            write_status(piece_dir, "failed", "Chrome CDP did not start. Close other Chrome windows and retry.")
+            print("[ERROR] Chrome did not start remote debugging. Close other Chrome windows and retry.")
+            return False
 
-            await page.goto("https://www.etsy.com/your/shops/me/listings/create")
-            await page.wait_for_timeout(3000)
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}")
+            context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            page = context.pages[0] if context.pages else await context.new_page()
+            # Chrome profile from Etsy Authentication already carries the session.
+            print_alert(
+                "Real Chrome is open.\n"
+                "If you are not signed into Etsy in THAT window, sign in now.\n"
+                "Then press ENTER here to continue the draft upload."
+            )
+            input("--> Press [ENTER] when Etsy is signed in in the Chrome window...")
+            try:
+                await context.storage_state(path=AUTH_STATE_PATH)
+            except Exception:
+                pass
+
+            async def page_looks_blocked(pg):
+                try:
+                    text = (await pg.inner_text("body")).lower()
+                except Exception:
+                    return False
+                return (
+                    "access is temporarily restricted" in text
+                    or "unusual activity" in text
+                    or "automated (bot) activity" in text
+                )
+
+            # Etsy moved create under /tools/… — old /listings/create is a permanent 404.
+            create_urls = [
+                "https://www.etsy.com/your/shops/me/tools/listings/create",
+                "https://www.etsy.com/your/shops/me/listings/create",
+            ]
+            listings_hub = "https://www.etsy.com/your/shops/me/tools/listings"
+            landed = False
+            for url in create_urls:
+                await page.goto(url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(2500)
+                if await page_looks_blocked(page):
+                    write_status(
+                        piece_dir,
+                        "failed",
+                        "Etsy temporarily restricted this network (bot wall). Stop retries; use manual draft for now.",
+                    )
+                    print_alert(
+                        "Etsy blocked this IP for automated activity.\n"
+                        "STOP clicking Upload Draft.\n"
+                        "Wait 1–2 hours (or try phone hotspot), then create the first draft MANUALLY in normal Chrome:\n"
+                        "  Shop Manager → Listings → Add a listing\n"
+                        "Do not keep retrying — that extends the ban."
+                    )
+                    input("--> Press [ENTER] to close this upload attempt...")
+                    return False
+                body = ""
+                try:
+                    body = (await page.inner_text("body")).lower()
+                except Exception:
+                    pass
+                if "page you were looking for was not found" in body or ("uh oh" in body and "not found" in body):
+                    print(f"[warn] 404 at {url}")
+                    continue
+                if "signin" in page.url or "join" in page.url:
+                    break
+                landed = True
+                print(f"[ok] Opened listing creator via {url}")
+                break
 
             if "signin" in page.url or "join" in page.url:
                 write_status(piece_dir, "waiting_manual", "Session expired — log in in the browser.")
                 await wait_for_user(page, "Session expired or invalid. Please log in manually in the browser window.")
                 await context.storage_state(path=AUTH_STATE_PATH)
                 write_status(piece_dir, "running", "Session refreshed; continuing form fill.")
+                await page.goto(create_urls[0], wait_until="domcontentloaded")
+                await page.wait_for_timeout(2500)
+                if await page_looks_blocked(page):
+                    write_status(piece_dir, "failed", "Etsy bot wall after login. Stop and wait.")
+                    print_alert("Still blocked after login. Stop retries; create draft manually later.")
+                    return False
+                landed = True
+
+            if not landed:
+                write_status(
+                    piece_dir,
+                    "waiting_manual",
+                    "Could not open create-listing URL — click Add a listing in Shop Manager.",
+                )
+                await page.goto(listings_hub, wait_until="domcontentloaded")
+                await page.wait_for_timeout(2000)
+                try:
+                    add_btn = page.get_by_role("link", name=re.compile(r"add a listing", re.I))
+                    if await add_btn.count() == 0:
+                        add_btn = page.get_by_role("button", name=re.compile(r"add a listing", re.I))
+                    if await add_btn.count():
+                        await add_btn.first.click()
+                        await page.wait_for_timeout(2500)
+                        landed = True
+                        print("[ok] Clicked Add a listing from listings hub")
+                except Exception as e:
+                    print(f"[warn] Could not click Add a listing: {e}")
+                if not landed:
+                    await wait_for_user(
+                        page,
+                        "Open Shop Manager → Listings → Add a listing, then press ENTER here.",
+                    )
+                    write_status(piece_dir, "running", "Continuing after manual create-listing open.")
 
             print("Navigated to listing creator. Starting form automation...")
 
@@ -426,7 +558,7 @@ async def upload_listing(piece_dir):
             else:
                 print("Upload did not confirm a saved draft — uploaded_at was NOT written.")
 
-            await browser.close()
+            # Leave real Chrome open (CDP). Closing it mid-session is confusing for operators.
             return ok
     except Exception as e:
         write_status(piece_dir, "failed", f"Upload crashed: {type(e).__name__}: {e}")
