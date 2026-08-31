@@ -7,6 +7,21 @@
 
 Local Windows dashboard (`tooling/upload/server.py` → `http://127.0.0.1:8080`) that turns concepts into print files, mockups, SEO copy, a Drive-linked delivery PDF, and an Etsy **draft** listing. Generator modes: AI, Public Domain (Met), Graphic Poster. **Archive Studio** is the bulk open-access acquisition engine (see [`tooling/upload/docs/ARCHIVE_STUDIO.md`](./tooling/upload/docs/ARCHIVE_STUDIO.md)).
 
+## Open this locally (viewable — it will not run as it does here)
+
+This repository is **inspectable**. You can clone it and open it on your computer to read the code and, if the dashboard process starts, look around the UI.
+
+**It will not work as a production suite on your machine.** Image generation, Etsy drafts, Google Drive packaging, and research scrapes depend on private API keys, OAuth apps, Playwright browsers, and local artwork that are **not** in this repo. Treat a clone as a view-only copy of the system.
+
+**[Open in Cursor / VS Code](vscode://vscode.git/clone?url=https://github.com/rosh-the-coder/aethelgard-production-suite.git)** · **[View on GitHub](https://github.com/rosh-the-coder/aethelgard-production-suite)** · **[Browse in the browser](https://github.dev/rosh-the-coder/aethelgard-production-suite)**
+
+```bash
+git clone https://github.com/rosh-the-coder/aethelgard-production-suite.git
+cd aethelgard-production-suite
+```
+
+On the operator machine only (keys already configured):
+
 ```powershell
 .\tooling\ad-creatives\.venv\Scripts\python.exe tooling\upload\server.py
 ```
